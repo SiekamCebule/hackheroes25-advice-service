@@ -6,9 +6,6 @@
 app = 'hackheroes25-advice'
 primary_region = 'ams'
 
-[build]
-  image = 'python:3.11-slim'
-
 [env]
   PORT = '8080'
 
