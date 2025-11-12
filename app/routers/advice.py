@@ -1,6 +1,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import JSONResponse
 
 from app.models.advice import AdviceRequestContext, AdviceResponsePayload, UserIdentifier
 from app.services.advice_service import AdviceService, get_advice_service
@@ -49,7 +50,9 @@ async def get_advice(
             response.advice.name,
             response.advice.kind,
         )
-        return response
+        payload = response.dict()
+        payload["logs"] = advice_service.get_latest_logs()
+        return JSONResponse(payload)
     except AdviceNotFoundError as error:
         logger.warning(
             "Advice not found for user_id=%s message_len=%d",

@@ -1,5 +1,1 @@
-- Sprawdzaj intencję/prośbę użytkownika. Każdy "kind" (rodzaj) porady (np. film, książka, podcast) ma swój odpowiednik.
-Robimy to po to, żeby zawsze polecić jakąś książkę, jeśli użytkownik o nią poprosi. Żeby nie było sytuacji, gdzie użytkownik prosi o książkę, a dostaje jakiś filmik na YT albo cytat Arystotelesa.
-AI powinno rozpoznać, kiedy nie ma żadnej konkretnej prośby - wtedy dajemy wolną rękę w wyborze czegoś - to jest bardzo ważne!!!
-Może to być ten sam model AI do text embeddingu, co do rozpoznawania kategorii Porad, jeśli obsłuży on brak takowej "prośby", i jednocześnie obsłuży daną prośbę. Sam zaprojektuj cały system.
-- Dodaj też domenowe logi żebym wiedział skąd co się dzieje; przynajmniej te brakujące
+- Zaplanować test psychologiczny i jego wpływ, a także kwestię customizacji odpowiedzi AI w czacie równolegle do Porady

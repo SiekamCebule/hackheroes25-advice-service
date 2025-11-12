@@ -1,6 +1,7 @@
 import logging
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 
 from app.routers.advice import router as advice_router
 
@@ -16,4 +17,4 @@ app.include_router(advice_router)
 
 @app.get("/")
 def root():
-    return {"msg": "Hello HackHeroes!"}
+    return FileResponse("static/index.html")

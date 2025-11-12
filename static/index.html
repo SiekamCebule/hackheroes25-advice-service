@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Advice Playground</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        margin: 2rem;
+        background: #f6f7fb;
+      }
+      h1 {
+        font-size: 1.5rem;
+        margin-bottom: 1rem;
+      }
+      form {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+      }
+      input[type="text"] {
+        flex: 1;
+        padding: 0.5rem;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
+      button {
+        padding: 0.5rem 1rem;
+        border: none;
+        border-radius: 4px;
+        background: #3b82f6;
+        color: #fff;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #2563eb;
+      }
+      pre {
+        background: #0f172a;
+        color: #e2e8f0;
+        padding: 1rem;
+        border-radius: 6px;
+        overflow-x: auto;
+      }
+      small {
+        color: #64748b;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Advice API Playground</h1>
+    <form id="advice-form">
+      <input
+        type="text"
+        id="message"
+        name="message"
+        placeholder="Enter your message..."
+        required
+      />
+      <button type="submit">Ask</button>
+    </form>
+    <small>Requests go to <code>/advice?message=...</code> with a demo user.</small>
+    <h2>Response</h2>
+    <pre id="result">Submit a message to see the response and logs.</pre>
+
+    <script>
+      const form = document.getElementById("advice-form");
+      const resultEl = document.getElementById("result");
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const params = new URLSearchParams({
+          message: document.getElementById("message").value,
+          user_id: "demo-ui-user",
+        });
+        resultEl.textContent = "Loading...";
+        try {
+          const response = await fetch(`/advice?${params.toString()}`);
+          const data = await response.json();
+          const logs = Array.isArray(data.logs) && data.logs.length
+            ? data.logs.join("\n")
+            : "Brak logów w odpowiedzi.";
+          resultEl.textContent =
+            JSON.stringify(data, null, 2) + "\n\nLogi:\n" + logs;
+        } catch (error) {
+          resultEl.textContent = `Error: ${error}`;
+        }
+      });
+    </script>
+  </body>
+</html>
+

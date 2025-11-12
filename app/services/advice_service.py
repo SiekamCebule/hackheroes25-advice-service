@@ -1,11 +1,11 @@
 from __future__ import annotations
+import logging
+import os
+from typing import Protocol, Sequence
+
 from app.integrations.supabase import create_supabase_async_client
 from app.repositories.advice_repository import SupabaseAdviceRepository
 from app.repositories.category_repository import SupabaseAdviceCategoryRepository
-
-import logging
-from typing import Protocol, Sequence
-
 from app.models.advice import (
     Advice,
     AdviceKind,
@@ -20,11 +20,13 @@ from app.repositories.category_repository import (
 )
 from app.services.advice_selection import (
     AdviceSelectionPipeline,
+    AdviceIntentDefinition,
+    OpenAIEmbeddingAdviceIntentDetector,
     EmbeddingCategoryDefinition,
     EchoAdviceResponseGenerator,
+    NullAdviceIntentDetector,
     OpenAIEmbeddingCategoryClassifier,
     StaticAdviceCategoryClassifier,
-    TrivialAdviceIntentDetector,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,6 +50,15 @@ class AdviceService:
         recommendation = await self.get_advice(request)
         return AdviceResponsePayload.from_recommendation(recommendation)
 
+    def get_latest_logs(self) -> Sequence[str]:
+        getter = getattr(self._provider, "get_latest_events", None)
+        if callable(getter):
+            result = getter()
+            if isinstance(result, Sequence) and all(isinstance(x, str) for x in result):
+                return result
+            return ()
+        return ()
+
 
 class PipelineAdviceProvider:
     def __init__(self, pipeline: AdviceSelectionPipeline) -> None:
@@ -55,6 +66,9 @@ class PipelineAdviceProvider:
 
     async def provide(self, request: AdviceRequestContext) -> AdviceRecommendation:
         return await self._pipeline.recommend(request)
+
+    def get_latest_events(self) -> Sequence[str]:
+        return self._pipeline.get_latest_events()
 
 
 def build_default_advice_repository() -> AdviceRepository:
@@ -71,7 +85,7 @@ def build_default_advice_pipeline() -> AdviceSelectionPipeline:
     advice_repository = build_default_advice_repository()
     category_repository = build_default_category_repository()
     category_classifier = StaticAdviceCategoryClassifier()
-    intent_detector = TrivialAdviceIntentDetector()
+    intent_detector = NullAdviceIntentDetector()
     response_generator = EchoAdviceResponseGenerator()
 
     return AdviceSelectionPipeline(
@@ -99,7 +113,18 @@ def build_supabase_advice_pipeline() -> AdviceSelectionPipeline:
             openai_error,
         )
         category_classifier = StaticAdviceCategoryClassifier()
-    intent_detector = TrivialAdviceIntentDetector()
+    try:
+        intent_detector = build_openai_intent_detector()
+        logger.info(
+            "Using EmbeddingAdviceIntentDetector with %d intent definitions.",
+            len(_OPENAI_INTENT_DEFINITIONS),
+        )
+    except RuntimeError as openai_error:
+        logger.warning(
+            "Falling back to NullAdviceIntentDetector due to OpenAI setup issue: %s",
+            openai_error,
+        )
+        intent_detector = NullAdviceIntentDetector()
     response_generator = EchoAdviceResponseGenerator()
 
     return AdviceSelectionPipeline(
@@ -126,10 +151,27 @@ def build_openai_category_classifier() -> OpenAIEmbeddingCategoryClassifier:
             "OPENAI category definitions are empty. Configure "
             "_OPENAI_CATEGORY_DEFINITIONS before building the classifier."
         )
+    category_model = os.getenv("OPENAI_CATEGORY_MODEL")
     return OpenAIEmbeddingCategoryClassifier(
         categories=_OPENAI_CATEGORY_DEFINITIONS,
         similarity_threshold=0.3,
         max_categories=6,
+        model=category_model,
+    )
+
+
+def build_openai_intent_detector() -> OpenAIEmbeddingAdviceIntentDetector:
+    if not _OPENAI_INTENT_DEFINITIONS:
+        raise RuntimeError(
+            "OPENAI intent definitions are empty. Configure "
+            "_OPENAI_INTENT_DEFINITIONS before building the detector."
+        )
+    intent_model = os.getenv("OPENAI_INTENT_MODEL")
+    return OpenAIEmbeddingAdviceIntentDetector(
+        definitions=_OPENAI_INTENT_DEFINITIONS,
+        threshold=0.485,
+        log_limit=5,
+        model=intent_model,
     )
 
 
@@ -195,6 +237,10 @@ _OPENAI_CATEGORY_DEFINITIONS: Sequence[EmbeddingCategoryDefinition] = (
     EmbeddingCategoryDefinition(
         name="Bezsilność",
         description="Użytkownik ma poczucie braku wpływu na sytuację i potrzebuje wsparcia w odzyskaniu sprawczości.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Depresja",
+        description="Użytkownik przeżywa depresję lub głęboką utratę nadzieji i sensu; lub interesuje się tematem depresji;",
     ),
     EmbeddingCategoryDefinition(
         name="Wstyd",
@@ -335,11 +381,64 @@ _OPENAI_CATEGORY_DEFINITIONS: Sequence[EmbeddingCategoryDefinition] = (
     EmbeddingCategoryDefinition(
         name="Trauma",
         description="Użytkownik myśli o traumie, cierpieniu psychicznym lub fizycznym, lub próbuje przezwyciężyć traumę.",
-    ),    EmbeddingCategoryDefinition(
+    ),
+    EmbeddingCategoryDefinition(
         name="Komunikacja",
         description="Użytkownik myśli o komunikacji, dialogu, komunikacji z innymi osobami lub z samym sobą.",
-    ), EmbeddingCategoryDefinition(
+    ),
+    EmbeddingCategoryDefinition(
         name="Public speaking",
         description="Użytkownik myśli o publicznym wystąpieniu, prelekcji, wykładzie lub innych formach komunikacji publicznej.",
+    ),
+)
+
+_OPENAI_INTENT_DEFINITIONS: Sequence[AdviceIntentDefinition] = (
+    AdviceIntentDefinition(
+        kind=AdviceKind.BOOK,
+        description="Użytkownik JAWNIE prosi o książkę lub rekomendację do przeczytania.",
+    ),
+    AdviceIntentDefinition(
+        kind=AdviceKind.MOVIE,
+        description="Użytkownik JAWNIE szuka filmu lub serialu do obejrzenia.",
+    ),
+    AdviceIntentDefinition(
+        kind=AdviceKind.MUSIC,
+        description="Użytkownik JAWNIE prosi o muzykę, utwór lub playlistę.",
+    ),
+    AdviceIntentDefinition(
+        kind=AdviceKind.YOUTUBE_VIDEO,
+        description="Użytkownik JAWNIE chce otrzymać link lub propozycję filmiku na YouTube (w skrócie YT).",
+    ),
+    AdviceIntentDefinition(
+        kind=AdviceKind.ARTICLE,
+        description="Użytkownik JAWNIE szuka artykułu, publikacji lub wpisu do przeczytania.",
+    ),
+    AdviceIntentDefinition(
+        kind=AdviceKind.HABIT,
+        description="Użytkownik JAWNIE prosi o nawyk, rutynę lub małe zadanie do wdrożenia.",
+    ),
+    AdviceIntentDefinition(
+        kind=AdviceKind.ADVICE,
+        description="Użytkownik JAWNIE prosi ogólnie o poradę lub wskazówkę, nie precyzując formatu.",
+    ),
+    AdviceIntentDefinition(
+        kind=AdviceKind.CONCEPT,
+        description="Użytkownik JAWNIE prosi o wyjaśnienie pojęcia, idei albo definicji.",
+    ),
+    AdviceIntentDefinition(
+        kind=AdviceKind.PSYCHOTHERAPY,
+        description="Użytkownik JAWNIE prosi o konkretną terapię lub poszukuje materiałów terapeutycznych.",
+    ),
+    AdviceIntentDefinition(
+        kind=AdviceKind.PODCAST,
+        description="Użytkownik JAWNIE prosi o podcast lub odcinek audio do posłuchania.",
+    ),
+    AdviceIntentDefinition(
+        kind=AdviceKind.QUOTE,
+        description="Użytkownik JAWNIE prosi o cytat, sentencję lub inspirujące słowa.",
+    ),
+    AdviceIntentDefinition(
+        kind=AdviceKind.PERSON,
+        description="Użytkownik prosi o informacje o konkretnej osobie, jej życiu, działalności lub wpływie. Np. użytkownik mówi \"znajdź osobę\" lub coś w tym stylu.",
     ),
 )

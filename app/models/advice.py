@@ -18,7 +18,8 @@ class AdviceKind(str, Enum):
     CONCEPT = "concept"
     PSYCHOTHERAPY = "psychotherapy"
     PODCAST = "podcast"
-    QUOTE = "quote"
+    QUOTE = "quote",
+    PERSON = "person"
 
 
 @dataclass(frozen=True)

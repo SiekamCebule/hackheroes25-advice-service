@@ -43,8 +43,16 @@ class AdviceCategoryClassifier(Protocol):
         raise NotImplementedError
 
 
+@dataclass(frozen=True)
+class AdviceIntentMatch:
+    kind: AdviceKind
+    score: float
+
+
 class AdviceIntentDetector(Protocol):
-    async def detect_preferred_kind(self, user_message: str) -> AdviceKind | None:
+    async def detect_preferred_kind(
+        self, user_message: str
+    ) -> AdviceIntentMatch | None:
         raise NotImplementedError
 
 
@@ -90,14 +98,23 @@ class AdviceSelectionPipeline:
         self._category_frequency_cache: dict[str, int] | None = None
         self._total_advice_count: int = 0
         self._frequency_lock = asyncio.Lock()
+        self._latest_events: list[str] = []
 
     async def recommend(self, request: AdviceRequestContext) -> AdviceRecommendation:
+        self._latest_events = []
         category_matches = await self._infer_categories(request.user_message)
-        preferred_kind = await self._intent_detector.detect_preferred_kind(
+        intent_match = await self._intent_detector.detect_preferred_kind(
             request.user_message
         )
+        if intent_match:
+            self._record(
+                f"Rozpoznano prośbę o rodzaj: {intent_match.kind.value} (score={intent_match.score:.3f})"
+            )
+        else:
+            self._record(
+                "Brak jednoznacznej prośby o konkretny rodzaj porady.")
 
-        advice = await self._select_advice(preferred_kind, category_matches)
+        advice = await self._select_advice(intent_match, category_matches)
         if advice is None:
             raise AdviceNotFoundError(
                 "No advice found for the given criteria.")
@@ -106,16 +123,23 @@ class AdviceSelectionPipeline:
             advice=advice,
             request=request,
             categories=tuple(match.name for match in category_matches),
-            preferred_kind=preferred_kind,
+            preferred_kind=intent_match.kind if intent_match else None,
         )
         return AdviceRecommendation(advice=advice, chat_response=chat_response)
+
+    def get_latest_events(self) -> Sequence[str]:
+        return tuple(self._latest_events)
+
+    def _record(self, message: str) -> None:
+        self._latest_events.append(message)
+        logger.info(message)
 
     async def _infer_categories(self, user_message: str) -> Sequence[CategoryMatch]:
         inferred_matches = await self._category_classifier.infer_categories(
             user_message
         )
         if not inferred_matches:
-            logger.info(
+            self._record(
                 "Nie wykryto żadnych kategorii w wypowiedzi użytkownika.")
             return ()
         known_categories = await self._category_repository.get_all()
@@ -137,30 +161,26 @@ class AdviceSelectionPipeline:
                             rank=match.rank,
                         )
                     )
-                    logger.info(
-                        "Wykryta kategoria '%s' | score=%.3f | pozycja=%d",
-                        canonical,
-                        match.score,
-                        match.rank,
+                    self._record(
+                        f"Wykryta kategoria '{canonical}' | score={match.score:.3f} | pozycja={match.rank}"
                     )
             else:
-                logger.info(
-                    "Kategoria '%s' nie pasuje do bazy (próbowano wariantów: %s)",
-                    match.name,
-                    self._build_category_variants(normalized),
+                self._record(
+                    f"Kategoria '{match.name}' nie pasuje do bazy (próbowano wariantów: {self._build_category_variants(normalized)})"
                 )
         if not unique_categories:
-            logger.info(
+            self._record(
                 "Żadna wykryta kategoria nie istnieje w bazie kategorii.")
         return tuple(unique_categories)
 
     async def _select_advice(
         self,
-        preferred_kind: AdviceKind | None,
+        intent_match: AdviceIntentMatch | None,
         matched_categories: Sequence[CategoryMatch],
     ) -> Advice | None:
         candidates: Sequence[Advice] = ()
         category_names = tuple(match.name for match in matched_categories)
+        preferred_kind = intent_match.kind if intent_match else None
 
         if preferred_kind is not None:
             if matched_categories:
@@ -191,12 +211,14 @@ class AdviceSelectionPipeline:
             matched_categories,
             self._category_frequency_cache or {},
             max(self._total_advice_count, len(candidates)),
+            intent_match,
         )
         if selected:
-            logger.info("Pipeline selected advice name='%s'", selected.name)
+            self._record(
+                f"Wybrana porada: {selected.name} ({selected.kind.value}).")
         else:
-            logger.warning(
-                "Pipeline ranking returned None despite candidates.")
+            self._record(
+                "Nie udało się wybrać porady na podstawie dostępnych kandydatów.")
         return selected
 
     @staticmethod
@@ -214,11 +236,24 @@ class AdviceSelectionPipeline:
         matched_categories: Sequence[CategoryMatch],
         category_frequencies: Mapping[str, int],
         total_advice_count: int,
+        intent_match: AdviceIntentMatch | None,
     ) -> Advice | None:
         if not candidates:
             return None
 
         if not matched_categories:
+            if intent_match:
+                matching_kind = [
+                    advice for advice in candidates if advice.kind == intent_match.kind
+                ]
+                if matching_kind:
+                    self._record(
+                        f"Brak dopasowanych kategorii – wybieram losowo spośród porad rodzaju {intent_match.kind.value}."
+                    )
+                    return random.choice(matching_kind)
+            self._record(
+                "Brak dopasowanych kategorii – wybieram losowo dowolną poradę."
+            )
             return random.choice(tuple(candidates))
 
         match_map = {match.name.lower(): match for match in matched_categories}
@@ -236,17 +271,18 @@ class AdviceSelectionPipeline:
             ]
 
             if not applicable_matches:
+                base_weight = 0.001
+                if intent_match and candidate.kind == intent_match.kind:
+                    base_weight = 0.001
                 population.append(candidate)
-                weights.append(0.001)
+                weights.append(base_weight)
                 continue
 
             for match in applicable_matches:
                 freq = category_frequencies.get(match.name.lower(), 0)
                 if freq == 1 and match.rank == 1:
-                    logger.info(
-                        "Unique top category '%s' found only in advice '%s'; selecting deterministically.",
-                        match.name,
-                        candidate.name,
+                    self._record(
+                        f"Unikatowa kategoria '{match.name}' (pozycja 1) występuje tylko w poradzie '{candidate.name}'. Wybór deterministyczny."
                     )
                     return candidate
 
@@ -266,22 +302,35 @@ class AdviceSelectionPipeline:
                 incremental = similarity * ranking_weight * rarity * specificity
                 weight += incremental
 
-            weight *= random.uniform(0.9, 1.1)
+            if intent_match:
+                if candidate.kind == intent_match.kind:
+                    weight *= 1.8
+                else:
+                    weight *= 0.15
+
+            weight *= random.uniform(0.85, 1.15)
             weights.append(max(weight, 0.02))
             population.append(candidate)
 
         total_weight = sum(weights)
         if total_weight <= 0:
+            self._record(
+                "Suma wag wyniosła 0 – wybieram losowo z dostępnych kandydatów."
+            )
             return random.choice(tuple(candidates))
 
         selected = random.choices(
             population=population, weights=weights, k=1)[0]
         selected_index = population.index(selected)
-        self._log_weights(population, weights,
-                          selected_index, matched_categories)
+        self._log_weights(
+            population,
+            weights,
+            selected_index,
+            matched_categories,
+            intent_match,
+        )
         return selected
 
-    @staticmethod
     @staticmethod
     def _match_category_to_known(
         candidate: str, variant_map: dict[str, str]
@@ -350,25 +399,33 @@ class AdviceSelectionPipeline:
                 self._total_advice_count,
             )
 
-    @staticmethod
     def _log_weights(
+        self,
         population: Sequence[Advice],
         weights: Sequence[float],
         selected_index: int,
         matched_categories: Sequence[CategoryMatch],
+        intent_match: AdviceIntentMatch | None,
     ) -> None:
         lines = ["Podsumowanie wag dla kandydatów:"]
         for idx, (advice, weight) in enumerate(zip(population, weights)):
             marker = " <= WYBRANA" if idx == selected_index else ""
             lines.append(f"  - {advice.name}: waga={weight:.3f}{marker}")
-        lines.append(
-            "Kategorie podstawowe: "
-            + ", ".join(
-                f"{match.name} (rank={match.rank}, score={match.score:.3f})"
-                for match in matched_categories
+        if matched_categories:
+            lines.append(
+                "Kategorie podstawowe: "
+                + ", ".join(
+                    f"{match.name} (rank={match.rank}, score={match.score:.3f})"
+                    for match in matched_categories
+                )
             )
-        )
-        logger.info("\n".join(lines))
+        else:
+            lines.append("Kategorie podstawowe: brak")
+        if intent_match:
+            lines.append(
+                f"Prośba użytkownika: {intent_match.kind.value} (score={intent_match.score:.3f})"
+            )
+        self._record("\n".join(lines))
 
 
 class EchoAdviceResponseGenerator(AdviceResponseGenerator):
@@ -390,9 +447,123 @@ class EchoAdviceResponseGenerator(AdviceResponseGenerator):
         )
 
 
-class TrivialAdviceIntentDetector(AdviceIntentDetector):
-    async def detect_preferred_kind(self, user_message: str) -> AdviceKind | None:
+class NullAdviceIntentDetector(AdviceIntentDetector):
+    async def detect_preferred_kind(
+        self, user_message: str
+    ) -> AdviceIntentMatch | None:
         return None
+
+
+@dataclass(frozen=True)
+class AdviceIntentDefinition:
+    kind: AdviceKind
+    description: str
+
+
+class OpenAIEmbeddingAdviceIntentDetector(AdviceIntentDetector):
+    def __init__(
+        self,
+        definitions: Sequence[AdviceIntentDefinition],
+        *,
+        settings: OpenAISettings | None = None,
+        client: OpenAIClient | None = None,
+        model: str | None = None,
+        threshold: float = 0.4,
+        log_limit: int = 3,
+    ) -> None:
+        if _RuntimeAsyncOpenAI is None:
+            raise RuntimeError(
+                "openai package not installed. Install it with `pip install openai`."
+            )
+        if not definitions:
+            raise ValueError("Advice intent detector requires definitions.")
+        self._settings = settings or get_openai_settings()
+        runtime_client: OpenAIClient = client or create_async_openai_client(
+            self._settings
+        )
+        if not isinstance(runtime_client, _RuntimeAsyncOpenAI):
+            raise TypeError(
+                "client must be an instance of openai.AsyncOpenAI."
+            )
+        self._client = runtime_client
+        self._model = model or self._settings.embeddings_model
+        self._threshold = threshold
+        self._definitions = tuple(definitions)
+        self._log_limit = log_limit
+        self._definition_embeddings: tuple[tuple[float, ...], ...] | None = None
+        self._prepare_lock = asyncio.Lock()
+
+    async def detect_preferred_kind(
+        self, user_message: str
+    ) -> AdviceIntentMatch | None:
+        message = user_message.strip()
+        if not message:
+            return None
+        await self._ensure_definition_embeddings()
+        if not self._definition_embeddings:
+            return None
+        message_embedding = await self._embed_text(message)
+        if not message_embedding:
+            return None
+
+        scored = []
+        for vector, definition in zip(
+            self._definition_embeddings, self._definitions
+        ):
+            score = OpenAIEmbeddingCategoryClassifier._cosine_similarity(
+                message_embedding, vector
+            )
+            scored.append((score, definition))
+
+        scored.sort(reverse=True, key=lambda item: item[0])
+        if not scored:
+            return None
+
+        if self._log_limit and scored:
+            lines = ["Rozpoznawanie intencji użytkownika (top wyniki):"]
+            for score, definition in scored[: self._log_limit]:
+                lines.append(
+                    f"  - {definition.kind.value}: score={score:.3f}"
+                )
+            logger.info("\n".join(lines))
+
+        best_score, best_definition = scored[0]
+        if best_score < self._threshold:
+            logger.info(
+                "Najwyższy wynik dla rodzaju porady (%s) jest zbyt niski (%.3f < %.2f); traktujemy brak prośby.",
+                best_definition.kind.value,
+                best_score,
+                self._threshold,
+            )
+            return None
+
+        return AdviceIntentMatch(kind=best_definition.kind, score=best_score)
+
+    async def _ensure_definition_embeddings(self) -> None:
+        if self._definition_embeddings is not None:
+            return
+        async with self._prepare_lock:
+            if self._definition_embeddings is not None:
+                return
+            inputs = [definition.description for definition in self._definitions]
+            embeddings = await self._embed_texts(inputs)
+            self._definition_embeddings = tuple(
+                tuple(vec) for vec in embeddings)
+
+    async def _embed_text(self, text: str) -> tuple[float, ...]:
+        embeddings = await self._embed_texts([text])
+        if not embeddings:
+            return ()
+        return tuple(embeddings[0])
+
+    async def _embed_texts(
+        self, texts: Sequence[str]
+    ) -> Sequence[Sequence[float]]:
+        response = await self._client.embeddings.create(
+            model=self._model,
+            input=list(texts),
+        )
+        return [tuple(item.embedding) for item in response.data]
 
 
 class StaticAdviceCategoryClassifier(AdviceCategoryClassifier):
