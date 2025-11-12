@@ -23,28 +23,24 @@ class SupabaseAdviceCategoryRepository(AdviceCategoryRepository):
         self._client = client
 
     async def get_all(self) -> Sequence[str]:
-        response = await self._client.table(self._TABLE_NAME).select("slug").order(
-            "slug"
-        ).execute()
+        response = (
+            self._client.table(self._TABLE_NAME)
+            .select("name")
+            .order("name")
+        )
+        response = await response.execute()
         self._raise_on_error(response)
-        slugs = []
+        names = []
         for row in response.data or []:
-            slug = row.get("slug")
-            if isinstance(slug, str):
-                slugs.append(slug.lower())
-        return tuple(slugs)
+            name = row.get("name")
+            if isinstance(name, str):
+                names.append(name)
+        return tuple(names)
 
     async def contains(self, category: str) -> bool:
         normalized = category.lower()
-        response = (
-            await self._client.table(self._TABLE_NAME)
-            .select("id")
-            .eq("slug", normalized)
-            .limit(1)
-            .execute()
-        )
-        self._raise_on_error(response)
-        return bool(response.data)
+        names = await self.get_all()
+        return normalized in {name.lower() for name in names}
 
     @staticmethod
     def _raise_on_error(response: Any) -> None:

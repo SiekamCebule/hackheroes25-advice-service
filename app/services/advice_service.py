@@ -1,5 +1,9 @@
 from __future__ import annotations
+from app.integrations.supabase import create_supabase_async_client
+from app.repositories.advice_repository import SupabaseAdviceRepository
+from app.repositories.category_repository import SupabaseAdviceCategoryRepository
 
+import logging
 from typing import Protocol, Sequence
 
 from app.models.advice import (
@@ -16,10 +20,14 @@ from app.repositories.category_repository import (
 )
 from app.services.advice_selection import (
     AdviceSelectionPipeline,
+    EmbeddingCategoryDefinition,
     EchoAdviceResponseGenerator,
+    OpenAIEmbeddingCategoryClassifier,
     StaticAdviceCategoryClassifier,
     TrivialAdviceIntentDetector,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AdviceProvider(Protocol):
@@ -75,12 +83,54 @@ def build_default_advice_pipeline() -> AdviceSelectionPipeline:
     )
 
 
+def build_supabase_advice_pipeline() -> AdviceSelectionPipeline:
+    client = create_supabase_async_client()
+    advice_repository = SupabaseAdviceRepository(client)
+    category_repository = SupabaseAdviceCategoryRepository(client)
+    try:
+        category_classifier = build_openai_category_classifier()
+        logger.info(
+            "Using OpenAIEmbeddingCategoryClassifier with %d category definitions.",
+            len(_OPENAI_CATEGORY_DEFINITIONS),
+        )
+    except RuntimeError as openai_error:
+        logger.warning(
+            "Falling back to StaticAdviceCategoryClassifier due to OpenAI setup issue: %s",
+            openai_error,
+        )
+        category_classifier = StaticAdviceCategoryClassifier()
+    intent_detector = TrivialAdviceIntentDetector()
+    response_generator = EchoAdviceResponseGenerator()
+
+    return AdviceSelectionPipeline(
+        advice_repository=advice_repository,
+        category_repository=category_repository,
+        category_classifier=category_classifier,
+        intent_detector=intent_detector,
+        response_generator=response_generator,
+    )
+
+
 def get_advice_service() -> AdviceService:
     # TODO: replace build_default_advice_pipeline with production-ready dependencies
     # (Supabase repositories, embedding-based classifiers, and LLM-powered response generators).
-    pipeline = build_default_advice_pipeline()
+    # pipeline = build_default_advice_pipeline()
+    pipeline = build_supabase_advice_pipeline()
     provider = PipelineAdviceProvider(pipeline=pipeline)
     return AdviceService(provider=provider)
+
+
+def build_openai_category_classifier() -> OpenAIEmbeddingCategoryClassifier:
+    if not _OPENAI_CATEGORY_DEFINITIONS:
+        raise RuntimeError(
+            "OPENAI category definitions are empty. Configure "
+            "_OPENAI_CATEGORY_DEFINITIONS before building the classifier."
+        )
+    return OpenAIEmbeddingCategoryClassifier(
+        categories=_OPENAI_CATEGORY_DEFINITIONS,
+        similarity_threshold=0.3,
+        max_categories=6,
+    )
 
 
 _DEFAULT_CATEGORIES: Sequence[str] = (
@@ -119,7 +169,7 @@ _DEFAULT_ADVICE_ITEMS: Sequence[Advice] = (
         kind=AdviceKind.ADVICE,
         description="A short breathing routine for moments of overwhelm.",
         link_url="https://example.com/breathing-exercise",
-        categories=("mindfulness", "despair"),
+        categories=("mindfulness", "despair", "general"),
     ),
     Advice(
         name="Meaningful Quote Collection",
@@ -134,5 +184,162 @@ _DEFAULT_ADVICE_ITEMS: Sequence[Advice] = (
         description="What to expect and how to prepare for your first visit.",
         link_url="https://example.com/therapy-guide",
         categories=("psychotherapy", "anxiety"),
+    ),
+)
+
+_OPENAI_CATEGORY_DEFINITIONS: Sequence[EmbeddingCategoryDefinition] = (
+    EmbeddingCategoryDefinition(
+        name="Poczucie winy",
+        description="Użytkownik odczuwa winę, żal lub nadmierną samokrytykę lub szuka sposobu, by sobie wybaczyć.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Bezsilność",
+        description="Użytkownik ma poczucie braku wpływu na sytuację i potrzebuje wsparcia w odzyskaniu sprawczości.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Wstyd",
+        description="Użytkownik doświadcza wstydu, unika oceny lub ma trudność z akceptacją siebie.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Rozpacz",
+        description="Użytkownik przeżywa silny smutek, utratę nadziei lub głęboki kryzys emocjonalny.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Bardzo silny kryzys psychiczny",
+        description="Użytkownik sygnalizuje intensywne cierpienie psychiczne i potrzebuje natychmiastowego wsparcia.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Strach",
+        description="Użytkownik opisuje lęk, poczucie zagrożenia lub niepokój związany z przyszłością.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Lęk społeczny",
+        description="Użytkownik boi się kontaktu z ludźmi, odrzucenia lub oceny społecznej.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Uzależnienie",
+        description="Użytkownik zmaga się z uzależnieniem lub zachowaniami kompulsywnymi.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Złość",
+        description="Użytkownik doświadcza silnej złości, frustracji lub agresji i szuka sposobów jej regulacji.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Pogarda",
+        description="Użytkownik wyraża pogardę wobec siebie lub innych, często jako mechanizm obronny.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Odwaga",
+        description="Użytkownik szuka siły do działania mimo lęku, potrzebuje wsparcia w podejmowaniu decyzji.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Akceptacja",
+        description="Użytkownik pracuje nad przyjęciem siebie, emocji lub trudnych sytuacji życiowych. Może też mieć problem z akceptacją lub przepracowaniem emocji.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Miłość",
+        description="Użytkownik mówi o potrzebie miłości, bliskości lub problemach w relacjach uczuciowych.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Relacje międzyludzkie",
+        description="Użytkownik analizuje więzi z innymi ludźmi, konflikty lub samotność.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Motywacja",
+        description="Użytkownik szuka inspiracji, energii do działania lub przezwyciężenia apatii.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Rozwój osobisty",
+        description="Użytkownik dąży do samodoskonalenia i lepszego zrozumienia siebie.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Uczenie się",
+        description="Użytkownik interesuje się procesem nauki, koncentracją lub efektywnością poznawczą.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Zazdrość",
+        description="Użytkownik doświadcza porównywania się z innymi, poczucia braku lub zazdrości.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Planowanie",
+        description="Użytkownik chce uporządkować działania, wyznaczyć cele lub poprawić organizację.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Nawyki",
+        description="Użytkownik chce dowiedzieć się czegoś o nawykach, ma destrukcyjne nawyki lub pracuje nad zmianą codziennych zachowań lub wprowadzeniem rutyny.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Psychologia",
+        description="Użytkownik porusza tematy psychologiczne, emocjonalne lub poznawcze, a szczególnie szuka wsparcia psychologicznego lub psychoterapeutycznego.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Zdrowie",
+        description="Użytkownik skupia się na kondycji fizycznej, psychicznej lub równowadze ciała i umysłu.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Aktywność fizyczna",
+        description="Użytkownik interesuje się ruchem, sportem lub wpływem aktywności na psychikę.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Relaksacja",
+        description="Użytkownik szuka sposobów na odprężenie i redukcję stresu.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Inspiracja",
+        description="Użytkownik poszukuje inspirujących treści lub odzyskania poczucia sensu.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Sukces",
+        description="Użytkownik rozważa swoje osiągnięcia, cele lub presję związaną z sukcesem.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Marzenia",
+        description="Użytkownik mówi o swoich pragnieniach, wizjach przyszłości lub potrzebie celu.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Szczęście",
+        description="Użytkownik szuka równowagi emocjonalnej, spokoju lub spełnienia, lub czuje potrzebę szczęścia w życiu.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Przebodźcowanie",
+        description="Użytkownik czuje się przytłoczony nadmiarem informacji lub bodźców.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Sprawy egzystencjalne",
+        description="Użytkownik rozmyśla o sensie życia, przemijaniu lub tożsamości, a także innych głębokich sprawach życiowych.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Media społecznościowe",
+        description="Użytkownik porusza temat wpływu mediów społecznościowych na psychikę lub relacje.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Ekspresja emocji",
+        description="Użytkownik chce lepiej wyrażać swoje emocje lub mówi o problemach z wyrażaniem emocji lub o stłumionych emocjach.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Umysł",
+        description="Użytkownik interesuje się mechanizmami myślenia, świadomości lub introspekcji.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Biznes",
+        description="Użytkownik myśli o biznesie, przedsiębiorczości lub o pracy w firmie.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Rodzina",
+        description="Użytkownik myśli o rodzinie, relacjach rodzinnych, w tym traumach i problemach rodzinnych.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Duchowość",
+        description="Użytkownik myśli o duchowości, religii, mistycyzmie lub innych sprawach duchowych.",
+    ),
+    EmbeddingCategoryDefinition(
+        name="Trauma",
+        description="Użytkownik myśli o traumie, cierpieniu psychicznym lub fizycznym, lub próbuje przezwyciężyć traumę.",
+    ),    EmbeddingCategoryDefinition(
+        name="Komunikacja",
+        description="Użytkownik myśli o komunikacji, dialogu, komunikacji z innymi osobami lub z samym sobą.",
+    ), EmbeddingCategoryDefinition(
+        name="Public speaking",
+        description="Użytkownik myśli o publicznym wystąpieniu, prelekcji, wykładzie lub innych formach komunikacji publicznej.",
     ),
 )

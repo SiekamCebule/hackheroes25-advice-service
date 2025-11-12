@@ -46,15 +46,15 @@ class SupabaseAdviceRepository(AdviceRepository):
         kind: AdviceKind,
         categories: Sequence[str],
     ) -> Sequence[Advice]:
-        category_slugs = tuple({category.lower() for category in categories})
-        if not category_slugs:
+        category_names = tuple({category.strip() for category in categories})
+        if not category_names:
             return ()
 
         return await self._fetch_advices(
             lambda query: query.eq("kind", kind.value).filter(
-                "advice_category_links.category.slug",
+                "advice_category_links.category.name",
                 "in",
-                self._build_supabase_in_filter(category_slugs),
+                self._build_supabase_in_filter(category_names),
             ),
             inner_join_categories=True,
         )
@@ -67,7 +67,7 @@ class SupabaseAdviceRepository(AdviceRepository):
         category_select = (
             "advice_category_links:advice_category_links"
             f"{'!inner' if inner_join_categories else ''}"
-            "(category:advice_categories(slug))"
+            "(category:advice_categories(name))"
         )
 
         base_query = self._client.table(self._TABLE_NAME).select(
@@ -134,9 +134,9 @@ class SupabaseAdviceRepository(AdviceRepository):
         categories: list[str] = []
         for link in links:
             category = link.get("category") or {}
-            slug = category.get("slug")
-            if isinstance(slug, str):
-                categories.append(slug.lower())
+            name = category.get("name")
+            if isinstance(name, str):
+                categories.append(name)
         return tuple(categories)
 
 

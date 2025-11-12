@@ -1,0 +1,4 @@
+- Jeśli jakaś kategoria jest bardzo rzadka, a akurat nam się "trafiła", zwiększ szansę na wybranie danego itemu
+- Jeśli jest mało kategorii w danej Poradzie, wystąpienie danej kategorii jest bardzo "ważne". Zmniejszenie ilości kategorii trochę zwiększa wagę
+- Jeśli jest sytuacja, że Porada w bazie ma tylko kategorię Złość, a inne itemy mają złość i inne kategorie, które też zostały "wybrane", to wciąż jakaś szansa na wybranie tamych ma istnieć
+- Jednocześnie, jak dużo kategorii i one "trafiają" to prawie na pewno ta rzecz

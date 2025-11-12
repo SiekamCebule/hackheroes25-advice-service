@@ -3,14 +3,25 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
-if TYPE_CHECKING:  # pragma: no cover - optional dependency hint
-    from supabase.client import AsyncClient  # type: ignore[import]
-    from supabase.lib.client_options import ClientOptions  # type: ignore[import]
-else:  # pragma: no cover - allow import without supabase installed
-    AsyncClient = Any  # type: ignore
-    ClientOptions = Any  # type: ignore
+if TYPE_CHECKING:  # pragma: no cover - typing helpers
+    # type: ignore[import]
+    from supabase.client import AsyncClient as AsyncClientProtocol
+else:
+    AsyncClientProtocol = Any  # type: ignore[misc]
+
+try:  # pragma: no cover - optional dependency hint
+    # type: ignore[import]
+    from supabase.client import AsyncClient as RuntimeAsyncClient
+    # type: ignore[import]
+    from supabase.lib.client_options import AsyncClientOptions
+except ImportError as import_error:  # pragma: no cover - allow informative failure
+    RuntimeAsyncClient = None  # type: ignore[assignment]
+    AsyncClientOptions = None  # type: ignore[assignment]
+    _IMPORT_ERROR: Exception | None = import_error
+else:
+    _IMPORT_ERROR = None
 
 _CLIENT_INFO_HEADER: Final[dict[str, str]] = {
     "X-Client-Info": "hackheroes25-advice-service"
@@ -39,7 +50,10 @@ class SupabaseSettings:
                 f"Missing required Supabase environment variables: {env_list}"
             )
 
-        return cls(url=url, service_role_key=service_role_key)
+        return cls(
+            url=cast(str, url),
+            service_role_key=cast(str, service_role_key),
+        )
 
 
 @lru_cache(maxsize=1)
@@ -49,19 +63,22 @@ def get_supabase_settings() -> SupabaseSettings:
 
 def create_supabase_async_client(
     settings: SupabaseSettings | None = None,
-) -> AsyncClient:
+) -> AsyncClientProtocol:
+    if RuntimeAsyncClient is None or AsyncClientOptions is None:
+        raise RuntimeError(
+            "Supabase client library is not installed. "
+            "Install it with `pip install supabase`."
+        ) from _IMPORT_ERROR
+
     settings = settings or get_supabase_settings()
-    options: ClientOptions | None = None
-    if ClientOptions is not Any:  # type: ignore[comparison-overlap]
-        options = ClientOptions(
-            headers=_CLIENT_INFO_HEADER,
-            auto_refresh_token=False,
-            persist_session=False,
-        )
-    return AsyncClient(
+    options = AsyncClientOptions(
+        headers=_CLIENT_INFO_HEADER,
+        auto_refresh_token=False,
+        persist_session=False,
+    )
+    client = RuntimeAsyncClient(
         supabase_url=settings.url,
         supabase_key=settings.service_role_key,
         options=options,
     )
-
-
+    return cast(AsyncClientProtocol, client)

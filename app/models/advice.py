@@ -15,8 +15,9 @@ class AdviceKind(str, Enum):
     ARTICLE = "article"
     HABIT = "habit"
     ADVICE = "advice"
-    IDEA = "idea"
+    CONCEPT = "concept"
     PSYCHOTHERAPY = "psychotherapy"
+    PODCAST = "podcast"
     QUOTE = "quote"
 
 

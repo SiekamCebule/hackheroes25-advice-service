@@ -1,12 +1,33 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import asyncio
+import logging
 import random
-from typing import Protocol, Sequence
+import unicodedata
+from typing import TYPE_CHECKING, Any, Protocol, Sequence
 
 from app.models.advice import Advice, AdviceKind, AdviceRecommendation, AdviceRequestContext
 from app.repositories.advice_repository import AdviceRepository
 from app.repositories.category_repository import AdviceCategoryRepository
+from app.integrations.openai import (
+    OpenAISettings,
+    create_async_openai_client,
+    get_openai_settings,
+)
+
+if TYPE_CHECKING:  # pragma: no cover - typing helper
+    from openai import AsyncOpenAI as OpenAIClient  # type: ignore[import]
+else:
+    OpenAIClient = Any  # type: ignore[misc]
+
+try:  # pragma: no cover - runtime availability check
+    from openai import AsyncOpenAI as _RuntimeAsyncOpenAI
+except ImportError:
+    _RuntimeAsyncOpenAI = None  # type: ignore[assignment]
+
+
+logger = logging.getLogger(__name__)
 
 
 class AdviceCategoryClassifier(Protocol):
@@ -57,10 +78,17 @@ class AdviceSelectionPipeline:
         self._response_generator = response_generator
 
     async def recommend(self, request: AdviceRequestContext) -> AdviceRecommendation:
+        logger.info(
+            "Pipeline recommend start user=%s message_len=%d",
+            request.user_identifier.user_id or "anonymous",
+            len(request.user_message),
+        )
         categories = await self._infer_categories(request.user_message)
+        logger.info("Pipeline categories=%s", categories or "[]")
         preferred_kind = await self._intent_detector.detect_preferred_kind(
             request.user_message
         )
+        logger.info("Pipeline preferred_kind=%s", preferred_kind or "none")
 
         advice = await self._select_advice(preferred_kind, categories)
         if advice is None:
@@ -78,14 +106,33 @@ class AdviceSelectionPipeline:
     async def _infer_categories(self, user_message: str) -> Sequence[str]:
         inferred = await self._category_classifier.infer_categories(user_message)
         if not inferred:
+            logger.info("Classifier produced no categories for message.")
             return ()
         known_categories = await self._category_repository.get_all()
-        known_set = {category.lower() for category in known_categories}
+        variant_map = self._build_known_category_map(known_categories)
         unique_categories = []
         for category in inferred:
             normalized = category.lower()
-            if normalized in known_set and normalized not in unique_categories:
-                unique_categories.append(normalized)
+            matched_name = self._match_category_to_known(
+                normalized, variant_map)
+            if matched_name:
+                canonical = matched_name
+                if canonical not in unique_categories:
+                    unique_categories.append(canonical)
+                    logger.info(
+                        "Classifier category '%s' matched repository name '%s'.",
+                        normalized,
+                        canonical,
+                    )
+            else:
+                logger.info(
+                    "Classifier category '%s' not in known set. Variants tried=%s",
+                    normalized,
+                    self._build_category_variants(normalized),
+                )
+        if not unique_categories:
+            logger.info(
+                "No classifier categories matched known repository categories.")
         return tuple(unique_categories)
 
     async def _select_advice(
@@ -103,6 +150,9 @@ class AdviceSelectionPipeline:
                 )
             if not candidates:
                 candidates = await self._advice_repository.get_by_kind(preferred_kind)
+                logger.info(
+                    "Candidates from kind filtering count=%d", len(candidates)
+                )
 
         if not candidates:
             if categories:
@@ -112,11 +162,21 @@ class AdviceSelectionPipeline:
                     for advice in all_advice
                     if self._contains_any_category(advice, categories)
                 )
+                logger.info(
+                    "Candidates after category scan count=%d", len(candidates)
+                )
 
         if not candidates:
             candidates = await self._advice_repository.get_all()
+            logger.info("Candidates fallback to all count=%d", len(candidates))
 
-        return self._rank_candidates(candidates, categories)
+        selected = self._rank_candidates(candidates, categories)
+        if selected:
+            logger.info("Pipeline selected advice name='%s'", selected.name)
+        else:
+            logger.warning(
+                "Pipeline ranking returned None despite candidates.")
+        return selected
 
     @staticmethod
     def _contains_any_category(advice: Advice, categories: Sequence[str]) -> bool:
@@ -147,14 +207,74 @@ class AdviceSelectionPipeline:
             scored_candidates.append((overlap, candidate))
 
         grouped: dict[int, list[Advice]] = {}
+        max_overlap = 0
         for score, candidate in scored_candidates:
             grouped.setdefault(score, []).append(candidate)
+            if score > max_overlap:
+                max_overlap = score
 
-        for target_score in (3, 2, 1):
-            if target_score in grouped:
-                return random.choice(grouped[target_score])
+        if max_overlap == 0:
+            return None
+
+        max_considered = min(max_overlap, 6)
+        for target_score in range(max_considered, 0, -1):
+            candidates_at_score = grouped.get(target_score)
+            if candidates_at_score:
+                logger.info(
+                    "Ranking selecting from %d candidates with overlap=%d",
+                    len(candidates_at_score),
+                    target_score,
+                )
+                return random.choice(candidates_at_score)
 
         return None
+
+    @staticmethod
+    @staticmethod
+    def _match_category_to_known(
+        candidate: str, variant_map: dict[str, str]
+    ) -> str | None:
+        for variant in AdviceSelectionPipeline._build_category_variants(candidate):
+            mapped = variant_map.get(variant.lower())
+            if mapped:
+                return mapped
+        return None
+
+    @staticmethod
+    def _build_category_variants(candidate: str) -> tuple[str, ...]:
+        stripped = candidate.strip().lower()
+        variants: list[str] = []
+        ascii_variant = (
+            unicodedata.normalize("NFKD", stripped)
+            .encode("ascii", "ignore")
+            .decode("ascii")
+        )
+        possible = [
+            stripped,
+            ascii_variant,
+            stripped.replace(" ", "-"),
+            ascii_variant.replace(" ", "-"),
+            stripped.replace(" ", "_"),
+            ascii_variant.replace(" ", "_"),
+        ]
+        for variant in possible:
+            if variant and variant not in variants:
+                variants.append(variant)
+            sanitized = "".join(
+                ch for ch in variant if ch.isalnum() or ch in {"-", "_", " "}
+            ).strip()
+            if sanitized and sanitized not in variants:
+                variants.append(sanitized)
+        return tuple(variants)
+
+    @staticmethod
+    def _build_known_category_map(categories: Sequence[str]) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+        for name in categories:
+            for variant in AdviceSelectionPipeline._build_category_variants(name):
+                key = variant.lower()
+                mapping.setdefault(key, name)
+        return mapping
 
 
 class EchoAdviceResponseGenerator(AdviceResponseGenerator):
@@ -189,3 +309,134 @@ class StaticAdviceCategoryClassifier(AdviceCategoryClassifier):
         if user_message.strip():
             return (self._fallback_category,)
         return ()
+
+
+@dataclass(frozen=True)
+class EmbeddingCategoryDefinition:
+    name: str
+    description: str
+
+
+class OpenAIEmbeddingCategoryClassifier(AdviceCategoryClassifier):
+    def __init__(
+        self,
+        categories: Sequence[EmbeddingCategoryDefinition],
+        *,
+        settings: OpenAISettings | None = None,
+        client: OpenAIClient | None = None,
+        model: str | None = None,
+        similarity_threshold: float = 0.25,
+        max_categories: int | None = 5,
+    ) -> None:
+        if _RuntimeAsyncOpenAI is None:
+            raise RuntimeError(
+                "openai package not installed. Install it with `pip install openai`."
+            )
+        if not categories:
+            raise ValueError(
+                "OpenAIEmbeddingCategoryClassifier requires categories.")
+        self._settings = settings or get_openai_settings()
+        runtime_client: OpenAIClient = client or create_async_openai_client(
+            self._settings
+        )
+        if not isinstance(runtime_client, _RuntimeAsyncOpenAI):
+            raise TypeError(
+                "client must be an instance of openai.AsyncOpenAI.")
+        self._client = runtime_client
+        self._model = model or self._settings.embeddings_model
+        self._similarity_threshold = similarity_threshold
+        self._max_categories = max_categories
+        self._definitions = tuple(
+            EmbeddingCategoryDefinition(
+                name=definition.name.lower(), description=definition.description
+            )
+            for definition in categories
+        )
+        self._category_embeddings: tuple[tuple[float, ...], ...] | None = None
+        self._prepare_lock = asyncio.Lock()
+        logger.info(
+            "Initialized OpenAIEmbeddingCategoryClassifier with %d categories "
+            "model=%s threshold=%.2f max_categories=%s",
+            len(self._definitions),
+            self._model,
+            self._similarity_threshold,
+            self._max_categories if self._max_categories is not None else "unlimited",
+        )
+
+    async def infer_categories(self, user_message: str) -> Sequence[str]:
+        message = user_message.strip()
+        if not message:
+            return ()
+        await self._ensure_category_embeddings()
+        if not self._category_embeddings:
+            return ()
+        message_embedding = await self._embed_text(message)
+        if not message_embedding:
+            return ()
+
+        scored: list[tuple[float, str]] = []
+        for vector, definition in zip(self._category_embeddings, self._definitions):
+            score = self._cosine_similarity(message_embedding, vector)
+            if score >= self._similarity_threshold:
+                scored.append((score, definition.name))
+
+        scored.sort(reverse=True, key=lambda item: item[0])
+        if scored:
+            lines = [
+                "Detected categories (similarity score):",
+                *[
+                    f"  - {slug}: {score:.3f}"
+                    for score, slug in scored
+                ],
+            ]
+            logger.info("\n".join(lines))
+        else:
+            logger.info(
+                "No categories passed similarity threshold %.2f",
+                self._similarity_threshold,
+            )
+
+        if self._max_categories is not None:
+            scored = scored[: self._max_categories]
+        return tuple(slug for _, slug in scored)
+
+    async def _ensure_category_embeddings(self) -> None:
+        if self._category_embeddings is not None:
+            return
+        async with self._prepare_lock:
+            if self._category_embeddings is not None:
+                return
+            logger.info(
+                "Embedding %d category descriptions via OpenAI model '%s'",
+                len(self._definitions),
+                self._model,
+            )
+            inputs = [definition.description for definition in self._definitions]
+            embeddings = await self._embed_texts(inputs)
+            self._category_embeddings = tuple(
+                tuple(vector) for vector in embeddings)
+            logger.info("Cached category embeddings.")
+
+    async def _embed_text(self, text: str) -> tuple[float, ...]:
+        embeddings = await self._embed_texts([text])
+        if not embeddings:
+            return ()
+        return tuple(embeddings[0])
+
+    async def _embed_texts(self, texts: Sequence[str]) -> Sequence[Sequence[float]]:
+        response = await self._client.embeddings.create(
+            model=self._model,
+            input=list(texts),
+        )
+        return [tuple(item.embedding) for item in response.data]
+
+    @staticmethod
+    def _cosine_similarity(
+        left: Sequence[float], right: Sequence[float]
+    ) -> float:
+        dot = sum(a * b for a, b in zip(left, right))
+        left_norm = sum(a * a for a in left) ** 0.5
+        right_norm = sum(b * b for b in right) ** 0.5
+        if left_norm == 0 or right_norm == 0:
+            return 0.0
+        return dot / (left_norm * right_norm)
