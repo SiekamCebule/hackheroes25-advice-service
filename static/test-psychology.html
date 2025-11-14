@@ -240,6 +240,11 @@
             border-left: 3px solid #16a34a;
         }
 
+        .trait-match.negative-impact {
+            background: #fee2e2;
+            border-left: 3px solid #dc2626;
+        }
+
         .trait-match.below-threshold {
             background: #fef2f2;
             border-left: 3px solid #dc2626;
@@ -627,10 +632,20 @@
                             <h5>Odpowiedź ${answer.answer_number}: "${answer.answer_text}"</h5>
                             <div class="trait-matches">`;
                         answer.trait_matches.forEach(match => {
-                            const thresholdIcon = match.above_threshold ? '✅' : '❌';
-                            const thresholdNote = match.above_threshold ? '' : ' (poniżej progu)';
-                            resultHtml += `<div class="trait-match ${match.above_threshold ? 'above-threshold' : 'below-threshold'}">
-                                <strong>${match.trait}:</strong> ${thresholdIcon} podobieństwo: ${match.cosine_similarity.toFixed(3)}, wkład: ${match.contribution.toFixed(3)}${thresholdNote}
+                            const cosine = typeof match.cosine_similarity === 'number' ? match.cosine_similarity : 0;
+                            const contribution = typeof match.contribution === 'number' ? match.contribution : 0;
+                            const isNegative = match.match_kind === 'negative';
+                            const thresholdIcon = match.above_threshold
+                                ? (isNegative ? '⚠️' : '✅')
+                                : '❌';
+                            const thresholdNote = match.above_threshold
+                                ? (isNegative ? ' – wpływ obniżający' : ' – wpływ wzmacniający')
+                                : ' (poniżej progu)';
+                            const matchClass = isNegative
+                                ? (match.above_threshold ? 'negative-impact' : 'below-threshold')
+                                : (match.above_threshold ? 'above-threshold' : 'below-threshold');
+                            resultHtml += `<div class="trait-match ${matchClass}">
+                                <strong>${match.trait}:</strong> ${thresholdIcon} podobieństwo: ${cosine.toFixed(3)}, wkład: ${contribution.toFixed(3)}${thresholdNote}
                             </div>`;
                         });
                         resultHtml += '</div></div>';

@@ -125,6 +125,35 @@
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
         }
 
+        .traits-display {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            background: #eef2ff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+
+        .trait-list-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.35rem 0;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .trait-list-item:last-child {
+            border-bottom: none;
+        }
+
+        .trait-list-name {
+            font-weight: 600;
+            color: #111827;
+        }
+
+        .trait-list-value {
+            font-weight: 700;
+            color: #2563eb;
+        }
+
         .trait-bar {
             display: flex;
             align-items: center;
@@ -180,14 +209,39 @@
             color: #374151;
         }
 
+        .question-details {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            background: #fef3c7;
+            border-radius: 8px;
+        }
+
         .question-detail {
             margin-bottom: 1rem;
-            padding-bottom: 1rem;
-            border-bottom: 1px solid #e5e7eb;
+            padding: 0.75rem;
+            background: #fff;
+            border-radius: 6px;
+            border-left: 4px solid #f59e0b;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
         }
 
         .question-detail:last-child {
             border-bottom: none;
+        }
+
+        .question-detail h5 {
+            margin: 0 0 0.5rem 0;
+            color: #92400e;
+        }
+
+        .question-detail ul {
+            margin: 0;
+            padding-left: 1.5rem;
+        }
+
+        .question-detail li {
+            margin-bottom: 0.35rem;
+            font-size: 0.9rem;
         }
 
         .impact-list {
@@ -207,6 +261,67 @@
             font-size: 0.9rem;
         }
 
+        .open-scoring {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            background: #dbeafe;
+            border-radius: 8px;
+        }
+
+        .open-scoring ul {
+            margin: 0;
+            padding-left: 1.5rem;
+        }
+
+        .trait-matches {
+            display: grid;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+
+        .trait-match {
+            padding: 0.5rem;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
+
+        .trait-match.above-threshold {
+            background: #dcfce7;
+            border-left: 3px solid #16a34a;
+        }
+
+        .trait-match.negative-impact {
+            background: #fee2e2;
+            border-left: 3px solid #dc2626;
+        }
+
+        .trait-match.below-threshold {
+            background: #fef2f2;
+            border-left: 3px solid #dc2626;
+            opacity: 0.7;
+        }
+
+        .open-details {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            background: #ecfdf5;
+            border-radius: 8px;
+        }
+
+        .open-answer-detail {
+            margin-bottom: 1.25rem;
+            padding: 1rem;
+            background: white;
+            border-radius: 6px;
+            border-left: 4px solid #10b981;
+        }
+
+        .open-answer-detail h5 {
+            margin: 0 0 0.75rem 0;
+            color: #065f46;
+            font-size: 1rem;
+        }
+
         .logs {
             background: #1f2937;
             color: #f9fafb;
@@ -217,6 +332,23 @@
             white-space: pre-wrap;
             overflow-x: auto;
         }
+
+        .scoring-logs {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            background: #f3f4f6;
+            border-radius: 8px;
+        }
+
+        .scoring-logs pre {
+            background: #111827;
+            color: #e5e7eb;
+            padding: 1rem;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin: 0;
+            font-size: 0.85rem;
+        }
     </style>
 </head>
 
@@ -225,6 +357,12 @@
     <p>Odpowiedz na wszystkie pytania używając skali od 1 do 7. Następnie przejdź do pytań otwartych.</p>
 
     <form id="vocation-form">
+        <div class="user-id-section">
+            <label for="user_id"><strong>Twój ID użytkownika:</strong></label>
+            <input type="text" id="user_id" name="user_id" placeholder="Wpisz swoje ID użytkownika" required>
+            <small>ID możesz uzyskać z systemu autoryzacji lub użyć testowego ID</small>
+        </div>
+
         <!-- Pytania zamknięte -->
         <div class="question">
             <h3>1. Dobrze odnajduję się w pracy grupowej</h3>
@@ -295,7 +433,8 @@
         </div>
 
         <div class="question">
-            <h3>5. Jestem zaawansowany w ogólnej obsłudze komputera (skróty klawiszowe, pakiety biurowe i inne programy)</h3>
+            <h3>5. Jestem zaawansowany w ogólnej obsłudze komputera (skróty klawiszowe, pakiety biurowe i inne programy)
+            </h3>
             <div class="labels">
                 <span>Zawsze nie</span>
                 <span>Zawsze tak</span>
@@ -533,7 +672,8 @@
         </div>
 
         <div class="question">
-            <h3>19. Chcę by praca rozwijała mnie jako człowieka, nawet kosztem mniejszych zarobków lub mniejszej stabilności</h3>
+            <h3>19. Chcę by praca rozwijała mnie jako człowieka, nawet kosztem mniejszych zarobków lub mniejszej
+                stabilności</h3>
             <div class="labels">
                 <span>Zawsze nie</span>
                 <span>Zawsze tak</span>
@@ -635,7 +775,8 @@
 
         <div class="open-question">
             <h3>27. Jak praca wpływa na Twoje życie prywatne - czego oczekujesz od tego balansu?</h3>
-            <textarea name="open4" placeholder="Opisz idealny balans praca-życie, elastyczność, priorytety..."></textarea>
+            <textarea name="open4"
+                placeholder="Opisz idealny balans praca-życie, elastyczność, priorytety..."></textarea>
         </div>
 
         <button type="submit" id="submit-btn">Wyślij Test Zawodowy</button>
@@ -644,7 +785,7 @@
     <div id="result"></div>
 
     <script>
-        document.getElementById('vocation-form').addEventListener('submit', async function(e) {
+        document.getElementById('vocation-form').addEventListener('submit', async function (e) {
             e.preventDefault();
 
             const submitBtn = document.getElementById('submit-btn');
@@ -721,82 +862,112 @@
 
         function displayResults(data) {
             const resultDiv = document.getElementById('result');
-            resultDiv.innerHTML = '';
+            let resultHtml = `<div class="scoring-details"><h3>${data.message}</h3></div>`;
 
-            // Komunikat
-            resultDiv.innerHTML += `<div class="scoring-details"><h3>${data.message}</h3></div>`;
-
-            // Cechy zawodowe
-            if (data.trait_scores) {
-                resultDiv.innerHTML += '<div class="trait-scores"><h3>Cechy Zawodowe</h3>';
-                Object.entries(data.trait_scores).forEach(([trait, value]) => {
-                    const percentage = Math.round(value * 100);
-                    resultDiv.innerHTML += `
-                        <div class="trait-bar">
-                            <div class="trait-name">${trait.replace(/_/g, ' ')}</div>
-                            <div class="trait-value">${percentage}%</div>
-                            <div class="bar-container">
-                                <div class="bar-fill" style="width: ${percentage}%"></div>
-                            </div>
+            if (data.trait_scores && Object.keys(data.trait_scores).length > 0) {
+                resultHtml += '<div class="traits-display"><h4>🏆 Cechy zawodowe (łączne wyniki):</h4>';
+                Object.entries(data.trait_scores).forEach(([trait, score]) => {
+                    const numericScore = typeof score === 'number' ? score : 0;
+                    const percentage = (numericScore * 100).toFixed(1);
+                    resultHtml += `
+                        <div class="trait-list-item">
+                            <span class="trait-list-name">${trait.replace(/_/g, ' ')}</span>
+                            <span class="trait-list-value">${percentage}%</span>
                         </div>
                     `;
                 });
-                resultDiv.innerHTML += '</div>';
+                resultHtml += '</div>';
             }
 
-            // Osobowość
-            if (data.persona_text) {
-                resultDiv.innerHTML += `
-                    <div class="persona-text">
-                        <h3>Opis Osobowości Zawodowej</h3>
-                        <p>${data.persona_text.replace(/\n/g, '<br>')}</p>
-                    </div>
-                `;
-            }
-
-            // Szczegóły scoringu
             if (data.question_details && data.question_details.length > 0) {
-                resultDiv.innerHTML += '<div class="scoring-details"><h4>Szczegóły Punktacji Pytań</h4>';
+                resultHtml += '<div class="question-details"><h4>📊 Szczegóły scoringu pytań zamkniętych:</h4>';
                 data.question_details.forEach((detail, index) => {
-                    resultDiv.innerHTML += `
-                        <div class="question-detail">
-                            <strong>Pytanie ${index + 1}:</strong> Odpowiedź ${detail.answer} wpływa na:
-                            <div class="impact-list">
-                                ${detail.impacts.map(impact =>
-                                    `<div class="impact-item">• ${impact.trait.replace(/_/g, ' ')}: ${impact.effect > 0 ? '+' : ''}${impact.effect}</div>`
-                                ).join('')}
-                            </div>
-                        </div>
-                    `;
+                    const questionNumber = detail.question_number ?? (index + 1);
+                    const answerValue = typeof detail.answer === 'number' ? detail.answer : '?';
+                    resultHtml += `<div class="question-detail"><h5>Pytanie ${questionNumber} (odpowiedź: ${answerValue}/7)</h5><ul>`;
+                    if (Array.isArray(detail.impacts)) {
+                        detail.impacts.forEach(impact => {
+                            const reverseNote = impact.reverse ? ' (odwrócona skala)' : '';
+                            const normalized = typeof impact.normalized_answer === 'number'
+                                ? impact.normalized_answer.toFixed(3)
+                                : (typeof impact.normalized === 'number' ? impact.normalized.toFixed(3) : '—');
+                            const weightValue = typeof impact.weight === 'number'
+                                ? impact.weight.toFixed(2)
+                                : (impact.weight ?? '—');
+                            const contributionValue = typeof impact.contribution === 'number'
+                                ? impact.contribution.toFixed(3)
+                                : (typeof impact.effect === 'number' ? impact.effect.toFixed(3) : '0.000');
+                            resultHtml += `<li><strong>${(impact.trait || '').replace(/_/g, ' ')}:</strong> znormalizowane ${normalized} × waga ${weightValue} = ${contributionValue}${reverseNote}</li>`;
+                        });
+                    }
+                    resultHtml += '</ul></div>';
                 });
-                resultDiv.innerHTML += '</div>';
+                resultHtml += '</div>';
             }
 
-            // Analiza odpowiedzi otwartych
+            if (data.open_answers_scoring && Object.keys(data.open_answers_scoring).length > 0) {
+                resultHtml += '<div class="open-scoring"><h4>💬 Scoring odpowiedzi otwartych:</h4><ul>';
+                Object.entries(data.open_answers_scoring).forEach(([trait, score]) => {
+                    const numericScore = typeof score === 'number' ? score : 0;
+                    resultHtml += `<li><strong>${trait.replace(/_/g, ' ')}:</strong> ${numericScore.toFixed(3)}</li>`;
+                });
+                resultHtml += '</ul></div>';
+            }
+
             if (data.open_answers_details && data.open_answers_details.length > 0) {
-                resultDiv.innerHTML += '<div class="scoring-details"><h4>Analiza Odpowiedzi Otwartych</h4>';
-                data.open_answers_details.forEach((detail, index) => {
-                    resultDiv.innerHTML += `
-                        <div class="question-detail">
-                            <strong>Pytanie otwarte ${index + 1}:</strong> "${detail.answer_text.substring(0, 100)}${detail.answer_text.length > 100 ? '...' : ''}"
-                            <div class="open-analysis">
-                                Wykryte cechy: ${detail.trait_matches.join(', ') || 'brak'}
-                            </div>
-                        </div>
-                    `;
+                resultHtml += '<div class="open-details"><h4>📝 Szczegóły analizy pytań otwartych:</h4>';
+                data.open_answers_details.forEach(answer => {
+                    const answerText = answer.answer_text || '';
+                    const answerNumber = answer.answer_number ?? '?';
+                    resultHtml += `<div class="open-answer-detail">
+                        <h5>Odpowiedź ${answerNumber}: "${answerText}"</h5>
+                        <div class="trait-matches">`;
+
+                    if (Array.isArray(answer.trait_matches)) {
+                        answer.trait_matches.forEach(match => {
+                            const cosine = typeof match.cosine_similarity === 'number' ? match.cosine_similarity : 0;
+                            const contribution = typeof match.contribution === 'number' ? match.contribution : 0;
+                            const isNegative = match.match_kind === 'negative';
+                            const thresholdIcon = match.above_threshold
+                                ? (isNegative ? '⚠️' : '✅')
+                                : '❌';
+                            const thresholdNote = match.above_threshold
+                                ? (isNegative ? ' – wpływ obniżający' : ' – wpływ wzmacniający')
+                                : ' (poniżej progu)';
+                            const matchClass = isNegative
+                                ? (match.above_threshold ? 'negative-impact' : 'below-threshold')
+                                : (match.above_threshold ? 'above-threshold' : 'below-threshold');
+
+                            resultHtml += `<div class="trait-match ${matchClass}">
+                                <strong>${(match.trait || '').replace(/_/g, ' ')}:</strong> ${thresholdIcon} podobieństwo: ${cosine.toFixed(3)}, wkład: ${contribution.toFixed(3)}${thresholdNote}
+                            </div>`;
+                        });
+                    } else {
+                        resultHtml += '<div class="open-analysis">Brak wykrytych cech</div>';
+                    }
+
+                    resultHtml += '</div></div>';
                 });
-                resultDiv.innerHTML += '</div>';
+                resultHtml += '</div>';
             }
 
-            // Logi systemu
             if (data.scoring_logs && data.scoring_logs.length > 0) {
-                resultDiv.innerHTML += `
-                    <div class="scoring-details">
-                        <h4>Logi Systemu</h4>
-                        <div class="logs">${data.scoring_logs.join('\n')}</div>
-                    </div>
-                `;
+                resultHtml += '<div class="scoring-logs"><h4>🔍 Logi systemu scoring:</h4><pre>';
+                data.scoring_logs.forEach(log => {
+                    resultHtml += `${log}\n`;
+                });
+                resultHtml += '</pre></div>';
             }
+
+            if (data.persona_text) {
+                resultHtml += `<div class="persona-text"><h3>🧠 Opis Osobowości Zawodowej</h3><p>${data.persona_text.replace(/\n/g, '<br>')}</p></div>`;
+            } else if (data.persona_generated) {
+                resultHtml += '<div class="persona-text"><h3>🧠 Opis Osobowości Zawodowej</h3><p>Opis został wygenerowany, ale nie udało się go pobrać – spróbuj ponownie.</p></div>';
+            } else {
+                resultHtml += '<div class="persona-text"><h3>ℹ️ Opis Osobowości</h3><p>Wypełnij oba testy, aby wygenerować pełny opis osobowości zawodowej.</p></div>';
+            }
+
+            resultDiv.innerHTML = resultHtml;
         }
     </script>
 </body>

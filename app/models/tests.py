@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from pydantic import BaseModel, Field, constr, field_validator
 
@@ -128,7 +128,7 @@ class TestSubmissionResponse(BaseModel):
     trait_scores: Mapping[str, float]
     persona_generated: bool = False
     persona_text: str | None = None
-    closed_answers_scoring: Mapping[str, dict] = Field(default_factory=dict)
+    closed_answers_scoring: Mapping[str, Any] = Field(default_factory=dict)
     open_answers_scoring: Mapping[str, float] = Field(default_factory=dict)
     open_answers_details: list[dict] = Field(default_factory=list)
     scoring_logs: list[str] = Field(default_factory=list)

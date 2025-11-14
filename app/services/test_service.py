@@ -131,6 +131,21 @@ VOCATION_TRAIT_DESCRIPTIONS: Mapping[str, str] = {
 }
 
 
+PSYCHO_OPEN_QUESTION_PROMPTS: Sequence[str] = (
+    "Pytanie 18 (psychologia) – Czego brakuje Ci do pełni szczęścia?",
+    "Pytanie 19 (psychologia) – Jaki byłby Twój wymarzony partner życiowy?",
+    "Pytanie 20 (psychologia) – Jak wyglądałby Twój wymarzony dzień?",
+    "Pytanie 21 (psychologia) – Czego w życiu najbardziej się boisz?",
+)
+
+VOCATION_OPEN_QUESTION_PROMPTS: Sequence[str] = (
+    "Pytanie 24 (zawodowy) – Opisz sytuację z pracy, która dała Ci największą satysfakcję i dlaczego.",
+    "Pytanie 25 (zawodowy) – Jakie umiejętności lub wiedzę chcesz najbardziej rozwijać w karierze?",
+    "Pytanie 26 (zawodowy) – Czego najbardziej unikasz lub czego się obawiasz w kontekście pracy zawodowej?",
+    "Pytanie 27 (zawodowy) – Jak praca wpływa na Twoje życie prywatne i jaki balans jest dla Ciebie idealny?",
+)
+
+
 def _normalize_scores(raw_scores: Mapping[str, float], max_score: Mapping[str, float]) -> Mapping[str, float]:
     normalized: dict[str, float] = {}
     for trait, value in raw_scores.items():
@@ -147,6 +162,8 @@ class OpenAnswerTraitClassifier:
         threshold: float = 0.45,
         max_boost: float = 0.2,
         model: str | None = None,
+        allow_negative: bool = True,
+        negative_weight: float = 1.0,
     ) -> None:
         self._trait_descriptions = trait_descriptions
         settings = get_openai_settings()
@@ -156,14 +173,25 @@ class OpenAnswerTraitClassifier:
         self._max_boost = max_boost
         self._trait_embeddings: list[tuple[str, Sequence[float]]] | None = None
         self._prepare_lock = asyncio.Lock()
+        self._negative_trait_embeddings: list[tuple[str,
+                                                    Sequence[float]]] | None = None
+        self._allow_negative = allow_negative
+        self._negative_weight = negative_weight
 
     async def _ensure_embeddings(self) -> None:
-        if self._trait_embeddings is not None:
+        if (
+            self._trait_embeddings is not None
+            and (not self._allow_negative or self._negative_trait_embeddings is not None)
+        ):
             return
         async with self._prepare_lock:
-            if self._trait_embeddings is not None:
+            if (
+                self._trait_embeddings is not None
+                and (not self._allow_negative or self._negative_trait_embeddings is not None)
+            ):
                 return
-            texts = list(self._trait_descriptions.values())
+            items = list(self._trait_descriptions.items())
+            texts = [desc for _, desc in items]
             response = await self._client.embeddings.create(
                 model=self._model,
                 input=texts,
@@ -172,22 +200,40 @@ class OpenAnswerTraitClassifier:
             self._trait_embeddings = list(
                 zip(self._trait_descriptions.keys(), embeddings)
             )
+            if self._allow_negative:
+                negative_texts = [
+                    self._build_negative_description(trait, desc) for trait, desc in items
+                ]
+                negative_response = await self._client.embeddings.create(
+                    model=self._model,
+                    input=negative_texts,
+                )
+                negative_embeddings = [
+                    tuple(item.embedding) for item in negative_response.data
+                ]
+                self._negative_trait_embeddings = list(
+                    zip(self._trait_descriptions.keys(), negative_embeddings)
+                )
 
     async def score_open_answers(
-        self, answers: Sequence[str]
+        self,
+        answers: Sequence[str],
+        *,
+        question_prompts: Sequence[str] | None = None,
     ) -> Mapping[str, float]:
         if not answers:
             return {}
         await self._ensure_embeddings()
         if not self._trait_embeddings:
             return {}
+        embedding_inputs = _build_embedding_inputs(answers, question_prompts)
         response = await self._client.embeddings.create(
             model=self._model,
-            input=list(answers),
+            input=embedding_inputs,
         )
         contributions: dict[str, float] = defaultdict(float)
         for answer_embedding in response.data:
-            for trait, trait_embedding in self._trait_embeddings:
+            for idx, (trait, trait_embedding) in enumerate(self._trait_embeddings):
                 score = _cosine_similarity(
                     answer_embedding.embedding, trait_embedding)
                 if score >= self._threshold:
@@ -197,10 +243,29 @@ class OpenAnswerTraitClassifier:
                         (excess / (1.0 - self._threshold)) * 3.0  # Do 4x więcej
                     contributions[trait] += score * \
                         self._max_boost * boost_factor
+                if self._allow_negative and self._negative_trait_embeddings:
+                    negative_embedding = self._negative_trait_embeddings[idx][1]
+                    negative_score = _cosine_similarity(
+                        answer_embedding.embedding, negative_embedding
+                    )
+                    if negative_score >= self._threshold:
+                        negative_excess = negative_score - self._threshold
+                        negative_boost = 1.0 + (
+                            (negative_excess / (1.0 - self._threshold)) * 3.0
+                        )
+                        contributions[trait] -= (
+                            negative_score
+                            * self._max_boost
+                            * negative_boost
+                            * self._negative_weight
+                        )
         return contributions
 
     async def score_open_answers_detailed(
-        self, answers: Sequence[str]
+        self,
+        answers: Sequence[str],
+        *,
+        question_prompts: Sequence[str] | None = None,
     ) -> list[dict]:
         """Return detailed scoring information for each open answer."""
         if not answers:
@@ -210,9 +275,10 @@ class OpenAnswerTraitClassifier:
         if not self._trait_embeddings:
             return []
 
+        embedding_inputs = _build_embedding_inputs(answers, question_prompts)
         response = await self._client.embeddings.create(
             model=self._model,
-            input=list(answers),
+            input=embedding_inputs,
         )
 
         details = []
@@ -224,7 +290,7 @@ class OpenAnswerTraitClassifier:
                 "trait_matches": []
             }
 
-            for trait, trait_embedding in self._trait_embeddings:
+            for idx, (trait, trait_embedding) in enumerate(self._trait_embeddings):
                 score = _cosine_similarity(
                     answer_embedding.embedding, trait_embedding)
                 if score >= self._threshold:
@@ -239,12 +305,50 @@ class OpenAnswerTraitClassifier:
                     "trait": trait,
                     "cosine_similarity": score,
                     "contribution": contribution,
-                    "above_threshold": score >= self._threshold
+                    "above_threshold": score >= self._threshold,
+                    "match_kind": "positive",
                 })
+
+                if self._allow_negative and self._negative_trait_embeddings:
+                    neg_embedding = self._negative_trait_embeddings[idx][1]
+                    neg_score = _cosine_similarity(
+                        answer_embedding.embedding, neg_embedding
+                    )
+                    if neg_score >= self._threshold:
+                        neg_excess = neg_score - self._threshold
+                        neg_boost = 1.0 + (
+                            (neg_excess / (1.0 - self._threshold)) * 3.0
+                        )
+                        neg_contribution = -(
+                            neg_score
+                            * self._max_boost
+                            * neg_boost
+                            * self._negative_weight
+                        )
+                    else:
+                        neg_contribution = 0
+
+                    answer_detail["trait_matches"].append(
+                        {
+                            "trait": trait,
+                            "cosine_similarity": neg_score,
+                            "contribution": neg_contribution,
+                            "above_threshold": neg_score >= self._threshold,
+                            "match_kind": "negative",
+                        }
+                    )
 
             details.append(answer_detail)
 
         return details
+
+    @staticmethod
+    def _build_negative_description(trait: str, description: str) -> str:
+        return (
+            f"Przeciwieństwo cechy '{trait}'. Osoba nie wykazuje zachowań opisanych jako: "
+            f"{description}. W praktyce oznacza to świadome unikanie lub brak kompetencji "
+            f"w tych obszarach."
+        )
 
 
 class PersonaNarrativeGenerator:
@@ -426,10 +530,12 @@ class TestProcessingService:
 
         # Szczegóły scoringu otwartych odpowiedzi
         open_scores = await self._psych_open_classifier.score_open_answers(
-            payload.open_answers
+            payload.open_answers,
+            question_prompts=PSYCHO_OPEN_QUESTION_PROMPTS,
         )
         open_answers_details = await self._psych_open_classifier.score_open_answers_detailed(
-            payload.open_answers
+            payload.open_answers,
+            question_prompts=PSYCHO_OPEN_QUESTION_PROMPTS,
         )
 
         scoring_logs.append(
@@ -476,15 +582,61 @@ class TestProcessingService:
                           VOCATION_QUESTION_IMPACTS, "vocation")
         _validate_open_count(payload.open_answers,
                              expected=4, test_name="vocation")
+
+        scoring_logs: list[str] = []
+        closed_answers_scoring: dict[str, float] = {}
+        question_details: list[dict] = []
+
+        for i, (answer, impacts) in enumerate(
+            zip(payload.closed_answers, VOCATION_QUESTION_IMPACTS)
+        ):
+            question_num = i + 1
+            question_detail = {
+                "question_number": question_num,
+                "answer": answer,
+                "impacts": [],
+            }
+
+            for impact in impacts:
+                normalized = _normalize_likert(answer, reverse=impact.reverse)
+                contribution = impact.weight * normalized
+                question_detail["impacts"].append(
+                    {
+                        "trait": impact.trait,
+                        "weight": impact.weight,
+                        "normalized_answer": normalized,
+                        "contribution": contribution,
+                        "reverse": impact.reverse,
+                    }
+                )
+                scoring_logs.append(
+                    f"[Vocation] Pytanie {question_num}: odpowiedź {answer} → cecha '{impact.trait}' "
+                    f"(waga: {impact.weight}, znormalizowane: {normalized:.3f}, wniosek: {contribution:.3f})"
+                )
+
+            question_details.append(question_detail)
+
         trait_scores = _score_closed_answers(
             payload.closed_answers,
             VOCATION_QUESTION_IMPACTS,
             VOCATION_TRAITS,
         )
         open_scores = await self._vocation_open_classifier.score_open_answers(
-            payload.open_answers
+            payload.open_answers,
+            question_prompts=VOCATION_OPEN_QUESTION_PROMPTS,
+        )
+        open_answers_details = await self._vocation_open_classifier.score_open_answers_detailed(
+            payload.open_answers,
+            question_prompts=VOCATION_OPEN_QUESTION_PROMPTS,
         )
         merged = _merge_scores(trait_scores, open_scores)
+        scoring_logs.append(
+            f"[Vocation] Scoring zamkniętych odpowiedzi: {dict(trait_scores)}"
+        )
+        scoring_logs.append(
+            f"[Vocation] Scoring otwartych odpowiedzi: {dict(open_scores)}"
+        )
+        scoring_logs.append(f"[Vocation] Połączone wyniki: {dict(merged)}")
         await self._repository.save_vocational_test(
             payload.user_id,
             payload.closed_answers,
@@ -504,6 +656,12 @@ class TestProcessingService:
             message="Zapisano wyniki testu zawodowego.",
             trait_scores=dict(merged),
             persona_generated=bool(persona_text),
+            persona_text=persona_text,
+            closed_answers_scoring=closed_answers_scoring,
+            open_answers_scoring=dict(open_scores),
+            open_answers_details=open_answers_details,
+            scoring_logs=scoring_logs,
+            question_details=question_details,
         )
 
 
@@ -554,8 +712,30 @@ def _merge_scores(
 ) -> Mapping[str, float]:
     merged: dict[str, float] = dict(base_scores)
     for trait, bonus in bonus_scores.items():
-        merged[trait] = min(merged.get(trait, 0.0) + bonus, 1.0)
+        merged[trait] = min(
+            max(merged.get(trait, 0.0) + bonus, 0.0),
+            1.0,
+        )
     return merged
+
+
+def _build_embedding_inputs(
+    answers: Sequence[str],
+    question_prompts: Sequence[str] | None = None,
+) -> list[str]:
+    inputs: list[str] = []
+    for idx, answer in enumerate(answers):
+        prompt = (
+            question_prompts[idx].strip()
+            if question_prompts and idx < len(question_prompts)
+            else ""
+        )
+        cleaned_answer = answer.strip()
+        if prompt:
+            inputs.append(f"{prompt}\nOdpowiedź użytkownika: {cleaned_answer}")
+        else:
+            inputs.append(cleaned_answer)
+    return inputs
 
 
 def _cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
