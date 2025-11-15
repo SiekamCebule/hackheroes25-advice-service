@@ -33,6 +33,15 @@ class UserIdentifier:
 
 @dataclass(frozen=True)
 class Advice:
+    """
+    Domain representation of a single advice item.
+
+    - `categories` are domain tags fetched from a separate table.
+    - `embedding` is an optional cached text embedding stored in the `advices` table
+      (used by embedding-based selection strategies).
+    - `id` is the database identifier when loaded from Supabase; in-memory items
+      can safely leave it as `None`.
+    """
     name: str
     kind: AdviceKind
     description: str
@@ -40,6 +49,8 @@ class Advice:
     image_url: Optional[str] = None
     author: Optional[str] = None
     categories: Sequence[str] = ()
+    embedding: Sequence[float] | None = None
+    id: Optional[int] = None
 
 
 @dataclass(frozen=True)

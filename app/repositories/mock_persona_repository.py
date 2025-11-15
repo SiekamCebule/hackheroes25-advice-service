@@ -24,6 +24,12 @@ class MockUserPersonaRepository(UserPersonaProvider):
             return persona.strip()
         return None
 
+    async def get_persona_by_type(
+        self, user_id: str | None, persona_type: str
+    ) -> str | None:
+        # Mock traktuje wszystkie persony identycznie niezależnie od typu.
+        return await self.get_persona(user_id)
+
     async def save_persona(
         self,
         user_id: str,

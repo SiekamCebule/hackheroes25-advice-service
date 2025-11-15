@@ -127,11 +127,52 @@ class SupabaseUserPersonaRepository(UserPersonaProvider):
         persona_text: str,
         persona_type: str = "default",
     ) -> None:
-        await self._client.table(self._table).upsert(
-            {
-                "user_id": user_id,
-                "persona_type": persona_type,
-                "persona_text": persona_text,
-            },
-            on_conflict="user_id",
-        ).execute()
+        payload = {
+            "user_id": user_id,
+            "persona_type": persona_type,
+            "persona_text": persona_text,
+        }
+        try:
+            existing = (
+                await self._client.table(self._table)
+                .select("id")
+                .eq("user_id", user_id)
+                .eq("persona_type", persona_type)
+                .limit(1)
+                .execute()
+            )
+        except Exception as exc:  # pragma: no cover - network layer guard
+            logger.warning(
+                "Failed to query persona before save for user %s type %s: %s",
+                user_id,
+                persona_type,
+                exc,
+            )
+            return
+
+        error = getattr(existing, "error", None)
+        if error:
+            logger.warning(
+                "Supabase error while checking persona existence for user %s type %s: %s",
+                user_id,
+                persona_type,
+                error,
+            )
+            return
+
+        records = existing.data or []
+        if records:
+            record_id = records[0].get("id")
+            query = self._client.table(self._table).update(
+                {"persona_text": persona_text}
+            )
+            if record_id is not None:
+                query = query.eq("id", record_id)
+            else:  # fallback to user/type match if id missing
+                query = query.eq("user_id", user_id).eq(
+                    "persona_type", persona_type
+                )
+            await query.execute()
+            return
+
+        await self._client.table(self._table).insert(payload).execute()

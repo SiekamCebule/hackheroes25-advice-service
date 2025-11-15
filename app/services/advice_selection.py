@@ -7,11 +7,11 @@ import os
 import random
 import re
 import unicodedata
-from collections import Counter
-from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, Sequence
+from collections import Counter, OrderedDict
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, Sequence, cast
 
 from app.models.advice import Advice, AdviceKind, AdviceRecommendation, AdviceRequestContext
-from app.repositories.advice_repository import AdviceRepository
+from app.repositories.advice_repository import AdviceRepository, EmbeddingUpdatableAdviceRepository
 from app.repositories.category_repository import AdviceCategoryRepository
 from app.integrations.openai import (
     OpenAISettings,
@@ -29,7 +29,6 @@ try:  # pragma: no cover - runtime availability check
     from openai import AsyncOpenAI as _RuntimeAsyncOpenAI
 except ImportError:
     _RuntimeAsyncOpenAI = None  # type: ignore[assignment]
-
 
 logger = logging.getLogger(__name__)
 
@@ -446,6 +445,344 @@ class AdviceSelectionPipeline:
         self._record("\n".join(lines))
 
 
+class PersonaEmbeddingAdviceSelectionPipeline:
+    """
+    Alternative selection pipeline that does NOT use categories.
+
+    It builds a rich embedding for the current request based on:
+    - psychological profile (required),
+    - vocational profile (optional),
+    - current user message,
+
+    and compares it with cached embeddings of all advices.
+    Intent detection (`kind`) is preserved and used as a hard/soft filter.
+    """
+
+    def __init__(
+        self,
+        advice_repository: EmbeddingUpdatableAdviceRepository,
+        intent_detector: AdviceIntentDetector,
+        response_generator: AdviceResponseGenerator,
+        persona_provider: UserPersonaProvider,
+        *,
+        similarity_threshold: float = 0.33,
+        embeddings_model: str | None = None,
+    ) -> None:
+        if _RuntimeAsyncOpenAI is None:
+            raise RuntimeError(
+                "openai package not installed. Install it with `pip install openai`."
+            )
+        self._advice_repository = advice_repository
+        self._intent_detector = intent_detector
+        self._response_generator = response_generator
+        self._persona_provider = persona_provider
+        self._similarity_threshold = similarity_threshold
+
+        settings = get_openai_settings()
+        runtime_client: OpenAIClient = create_async_openai_client(settings)
+        if not isinstance(runtime_client, _RuntimeAsyncOpenAI):
+            raise TypeError(
+                "client must be an instance of openai.AsyncOpenAI.")
+        self._client = runtime_client
+        self._embeddings_model = (
+            embeddings_model
+            or os.getenv("OPENAI_ADVICE_EMBEDDING_MODEL")
+            or settings.embeddings_model
+        )
+
+        self._latest_events: list[str] = []
+        # In-memory cache keyed by advice id
+        self._embedding_cache: dict[int, tuple[float, ...]] = {}
+        self._cache_max_size = int(
+            os.getenv("ADVICE_RESULT_CACHE_SIZE", "20") or 0)
+        self._result_cache: OrderedDict[
+            tuple[str, str], AdviceRecommendation
+        ] = OrderedDict()
+
+        if hasattr(self._response_generator, "set_log_sink"):
+            try:
+                self._response_generator.set_log_sink(
+                    self._record)  # type: ignore[attr-defined]
+            except TypeError:
+                pass
+
+    def get_latest_events(self) -> Sequence[str]:
+        return tuple(self._latest_events)
+
+    def _record(self, message: str) -> None:
+        self._latest_events.append(message)
+        logger.info(message)
+
+    async def recommend(self, request: AdviceRequestContext) -> AdviceRecommendation:
+        self._latest_events = []
+        user_id = request.user_identifier.user_id
+        if not user_id:
+            self._record(
+                "Tryb embeddingowy wymaga identyfikatora użytkownika (user_id)."
+            )
+            raise AdviceNotFoundError(
+                "Brak identyfikatora użytkownika – nie można wykorzystać profilów testowych."
+            )
+
+        psych_profile = await self._persona_provider.get_persona_by_type(
+            user_id, "psychology"
+        )
+        if not psych_profile:
+            self._record(
+                "Brak profilu psychologicznego użytkownika – odrzucam żądanie."
+            )
+            raise AdviceNotFoundError(
+                "Brak profilu psychologicznego użytkownika – wykonaj najpierw test psychologiczny."
+            )
+
+        vocational_profile = await self._persona_provider.get_persona_by_type(
+            user_id, "vocational"
+        )
+
+        normalized_message = request.user_message.strip()
+        cache_key = (user_id, normalized_message)
+        cached_result = self._get_cached_result(cache_key)
+        if cached_result:
+            self._record(
+                "Cache hit: zwracam wcześniej wygenerowaną poradę dla tego użytkownika i wiadomości."
+            )
+            return cached_result
+
+        # 1. Intent detection (kind)
+        intent_match = await self._intent_detector.detect_preferred_kind(
+            request.user_message
+        )
+        if intent_match:
+            self._record(
+                f"Rozpoznano prośbę o rodzaj: {intent_match.kind.value} (score={intent_match.score:.3f})"
+            )
+        else:
+            self._record(
+                "Brak jednoznacznej prośby o konkretny rodzaj porady (kind) – rozważam wszystkie rodzaje."
+            )
+
+        # 2. Build embedding input combining profiles and current message
+        embedding_input_lines = [
+            f"Profil psychologiczny użytkownika: {psych_profile}",
+        ]
+        if vocational_profile:
+            embedding_input_lines.append(
+                f"Profil zawodowy użytkownika: {vocational_profile}"
+            )
+        embedding_input_lines.append(
+            f"Wiadomość użytkownika: {request.user_message}")
+        embedding_input = "\n".join(embedding_input_lines)
+
+        query_embedding = await self._embed_text(embedding_input)
+        if not query_embedding:
+            self._record("Nie udało się wygenerować embeddingu dla żądania.")
+            raise AdviceNotFoundError(
+                "Błąd podczas analizowania profilu użytkownika – spróbuj ponownie."
+            )
+
+        # 3. Fetch candidate advices filtered by intent (kind), if recognised
+        if intent_match:
+            candidates = await self._advice_repository.get_by_kind(intent_match.kind)
+            if candidates:
+                self._record(
+                    f"Rozważam {len(candidates)} porad rodzaju {intent_match.kind.value}."
+                )
+            else:
+                self._record(
+                    f"Brak porad rodzaju {intent_match.kind.value} – rozważam pełny katalog."
+                )
+        else:
+            candidates = ()
+
+        if not candidates:
+            candidates = await self._advice_repository.get_all()
+            self._record(
+                f"Rozpoznano łącznie {len(candidates)} porad w katalogu (bez filtrowania po kategoriach)."
+            )
+
+        # 4. Ensure advice embeddings exist (lazy cache + Supabase update)
+        similarities: list[tuple[Advice, float]] = []
+        for advice in candidates:
+            if advice.id is None:
+                # Should not happen for Supabase-backed repository, but be defensive
+                self._record(
+                    f"Porada '{advice.name}' nie ma identyfikatora – pomijam w trybie embeddingowym."
+                )
+                continue
+
+            vector = await self._get_or_create_advice_embedding(advice)
+            if not vector:
+                self._record(
+                    f"Nie udało się wygenerować embeddingu dla porady '{advice.name}' – pomijam."
+                )
+                continue
+            score = OpenAIEmbeddingCategoryClassifier._cosine_similarity(
+                query_embedding, vector
+            )
+            similarities.append((advice, score))
+
+        if not similarities:
+            self._record(
+                "Żadna porada nie otrzymała poprawnego embeddingu – nie można nic zaproponować."
+            )
+            raise AdviceNotFoundError(
+                "Brak porad możliwych do dopasowania w trybie embeddingowym."
+            )
+
+        # 5. Filter by minimal similarity threshold
+        filtered = [
+            (advice, score)
+            for advice, score in similarities
+            if score >= self._similarity_threshold
+        ]
+        if not filtered:
+            self._record(
+                f"Wszystkie porady miały zbyt niski wynik podobieństwa (< {self._similarity_threshold:.2f})."
+            )
+            raise AdviceNotFoundError(
+                "Brak wystarczająco dopasowanej porady do profilu użytkownika."
+            )
+
+        # Ograniczamy się do TOP5 dopasowań, z mocnym naciskiem na TOP3
+        filtered.sort(key=lambda item: item[1], reverse=True)
+        top_candidates = filtered[:5]
+        position_multipliers = [30.0, 7, 4, 0.5, 0.25]
+
+        # 6. Probabilistic selection: similarity^2 z mnożnikami pozycji i intentu
+        population: list[Advice] = []
+        weights: list[float] = []
+        for idx, (advice, score) in enumerate(top_candidates):
+            weight = score * score
+            weight *= (
+                position_multipliers[idx]
+                if idx < len(position_multipliers)
+                else position_multipliers[-1]
+            )
+            if intent_match:
+                if advice.kind == intent_match.kind:
+                    weight *= 1.8
+                else:
+                    weight *= 0.15
+            # Small jitter to avoid deterministic behaviour for ties
+            weight *= random.uniform(0.9, 1.1)
+            weights.append(max(weight, 0.01))
+            population.append(advice)
+
+        total_weight = sum(weights)
+        if total_weight <= 0:
+            self._record(
+                "Suma wag w trybie embeddingowym wyniosła 0 – wybieram losowo spośród dopasowanych."
+            )
+            selected = random.choice([advice for advice, _ in top_candidates])
+        else:
+            selected = random.choices(
+                population=population, weights=weights, k=1)[0]
+
+        self._record(
+            "Podsumowanie podobieństw embeddingowych (TOP 5):\n"
+            + "\n".join(
+                f"  - {advice.name} ({advice.kind.value}): score={score:.3f}"
+                for advice, score in top_candidates
+            )
+        )
+        self._record(
+            f"Wybrana porada (embedding): {selected.name} ({selected.kind.value})."
+        )
+
+        chat_response = await self._response_generator.generate_response(
+            advice=selected,
+            request=request,
+            categories=(),
+            preferred_kind=intent_match.kind if intent_match else None,
+        )
+        recommendation = AdviceRecommendation(
+            advice=selected, chat_response=chat_response)
+        self._store_cached_result(cache_key, recommendation)
+        return recommendation
+
+    async def _get_or_create_advice_embedding(
+        self, advice: Advice
+    ) -> tuple[float, ...]:
+        assert advice.id is not None
+        if advice.id in self._embedding_cache:
+            return self._embedding_cache[advice.id]
+
+        # If Supabase already has an embedding, reuse it and cache locally
+        if advice.embedding:
+            vector = tuple(float(x) for x in advice.embedding)
+            self._embedding_cache[advice.id] = vector
+            return vector
+
+        # Jeśli porada nie ma opisu w bazie, na razie ją pomijamy
+        description = advice.description or ""
+        if not description.strip():
+            self._record(
+                f"Porada '{advice.name}' nie ma opisu w bazie – pomijam w trybie embeddingowym."
+            )
+            return ()
+
+        text = f"Rodzaj: {advice.kind.value}\n{description}"
+        try:
+            response = await self._client.embeddings.create(
+                model=self._embeddings_model,
+                input=[text],
+            )
+            embedding = tuple(response.data[0].embedding)
+        except Exception as exc:  # pragma: no cover - network guard
+            self._record(
+                f"Błąd generowania embeddingu dla porady '{advice.name}': {exc}"
+            )
+            return ()
+
+        # Persist in Supabase as cache
+        try:
+            await self._advice_repository.update_embedding(advice.id, embedding)
+            self._record(
+                f"Zapisano embedding w bazie dla porady '{advice.name}' (id={advice.id})."
+            )
+        except Exception as exc:  # pragma: no cover - defensive DB layer
+            self._record(
+                f"Nie udało się zapisać embeddingu w bazie dla porady '{advice.name}': {exc}"
+            )
+
+        self._embedding_cache[advice.id] = embedding
+        return embedding
+
+    async def _embed_text(self, text: str) -> tuple[float, ...]:
+        try:
+            response = await self._client.embeddings.create(
+                model=self._embeddings_model,
+                input=[text],
+            )
+        except Exception as exc:  # pragma: no cover - network guard
+            self._record(f"Błąd generowania embeddingu zapytania: {exc}")
+            return ()
+        data = response.data or []
+        if not data:
+            return ()
+        return tuple(data[0].embedding)
+
+    def _get_cached_result(
+        self, key: tuple[str, str]
+    ) -> AdviceRecommendation | None:
+        if self._cache_max_size <= 0:
+            return None
+        cached = self._result_cache.get(key)
+        if cached is not None:
+            self._result_cache.move_to_end(key)
+        return cached
+
+    def _store_cached_result(
+        self, key: tuple[str, str], value: AdviceRecommendation
+    ) -> None:
+        if self._cache_max_size <= 0:
+            return
+        self._result_cache[key] = value
+        self._result_cache.move_to_end(key)
+        while len(self._result_cache) > self._cache_max_size:
+            self._result_cache.popitem(last=False)
+
+
 class EchoAdviceResponseGenerator(AdviceResponseGenerator):
     def set_log_sink(self, sink: Callable[[str], None]) -> None:  # pragma: no cover - compatibility hook
         pass
@@ -608,6 +945,8 @@ class LLMAdviceResponseGenerator(AdviceResponseGenerator):
         self._client = runtime_client
         self._model = model or os.getenv(
             "OPENAI_RESPONSE_MODEL") or "gpt-5-mini"
+        self._reasoning_effort = os.getenv(
+            "OPENAI_REASONING_EFFORT", "low") or "low"
         self._log_sink: Callable[[str], None] | None = None
 
     def set_log_sink(self, sink: Callable[[str], None]) -> None:
@@ -626,22 +965,31 @@ class LLMAdviceResponseGenerator(AdviceResponseGenerator):
         categories: Sequence[str],
         preferred_kind: AdviceKind | None,
     ) -> str:
+        self._log(f"🚀 Rozpoczynam generowanie odpowiedzi LLM")
+        self._log(f"📋 Porada: '{advice.name}' typu {advice.kind.value}")
+        self._log(f"👤 User ID: {request.user_identifier.user_id}")
+        self._log(f"💬 Wiadomość: '{request.user_message}'")
         self._log(
-            f"Generuję odpowiedź LLM dla porady '{advice.name}' typu {advice.kind.value}."
-        )
+            f"🏷️ Kategorie: {', '.join(categories) if categories else 'brak'}")
+        self._log(
+            f"🎯 Preferowany rodzaj: {preferred_kind.value if preferred_kind else 'brak'}")
         persona_text: str | None = None
         user_id = request.user_identifier.user_id
+        self._log(f"🔍 Szukam persony dla user_id: '{user_id}'")
         if user_id:
-            persona_text = await self._persona_provider.get_persona(user_id)
-            if persona_text:
-                self._log("Pobrano opis osobowości użytkownika.")
-            else:
-                self._log(
-                    "Brak zapisanego opisu osobowości dla użytkownika – użyję neutralnego tonu."
-                )
+            try:
+                persona_text = await self._persona_provider.get_persona(user_id)
+                if persona_text:
+                    self._log(f"✅ Pobrano personę: {persona_text[:50]}...")
+                else:
+                    self._log(
+                        "⚠️ Brak zapisanego opisu osobowości – użyję neutralnego tonu")
+            except Exception as e:
+                self._log(f"❌ Błąd podczas pobierania persony: {e}")
+                persona_text = None
         else:
             self._log(
-                "Brak identyfikatora użytkownika – persona nie będzie wykorzystana.")
+                "⚠️ Brak identyfikatora użytkownika – persona nie będzie wykorzystana")
 
         advice_description = advice.description or "Brak dodatkowego opisu."
         categories_text = (
@@ -656,64 +1004,54 @@ class LLMAdviceResponseGenerator(AdviceResponseGenerator):
         )
 
         system_prompt = (
-            "You are a concise, caring assistant. "
-            "Craft responses that are empathetic, supportive, and action oriented. "
-            "Always produce exactly ten sentences. "
-            "Do not include hyperlinks or bullet lists."
-            "Do not mention the exact advice's name"
-            "Do not mention anything about \"users personality\" itself, like meta"
-        )
-
-        user_prompt = (
-            "User message:\n"
-            f"{request.user_message}\n\n"
-            "Advice details:\n"
-            f"Name: {advice.name}\n"
-            f"Kind: {advice.kind.value}\n"
-            f"Description: {advice_description}\n"
-            f"Categories considered: {categories_text}\n\n"
-            "Persona description:\n"
-            f"{persona_prompt}\n\n"
-            "Write exactly 10 sentences that:\n"
+            "Jesteś opiekuńczym asystentem."
+            "Twoim zadaniem jest wygenerowanie odpowiedzi, która będzie dostosowana do osobowości użytkownika i będzie miała charakter zwięzły, wspierający i pełen nadziei. Pisz językiem naturalnym, bez meta-informacji takich jak \"Znam twój profil osobowości\" albo \"Nazwa porady to X\". Jeśli czasem porada jest słabo dopasowana, spróbuj to \"wyratować\" mówiąc trochę ogólnikami i lekko usprawiedliwiając wybór."
+            "\nPisz 10 zdań, które:\n"
             "1. Odnoszą się do potrzeb użytkownika.\n"
             "2. Wyjaśniają, dlaczego wybrana porada może pomóc i jak ją zastosować.\n"
             "3. Utrzymują ton zwięzły, wspierający, opiekuńczy i pełen nadziei.\n"
-            "4. Nie zawierają linków ani zachęt do opuszczenia rozmowy.\n"
-            "5. Upewniają użytkownika, że jest zrozumiany.\n"
+            "4. Upewniają użytkownika, że jest zrozumiany.\n"
+            "5. Całość ma być bardzo wyraźnie dostosowana do osobowości użytkownika, nawet wspomnij delikatnie o cechach osobowości użytkownika.\n"
         )
 
+        author_line = f"Autor: {advice.author}\n" if advice.author else ""
+        user_prompt = (
+            "# Wiadomość użytkownika:\n"
+            f"{request.user_message}\n\n"
+            "# Porada dla użytkownika:\n"
+            f"Nazwa: {advice.name}\n"
+            f"Rodzaj: {advice.kind.value}\n"
+            f"Opis: {advice_description}\n"
+            f"{author_line}"
+            "# Opis osobowości użytkownika:\n"
+            f"{persona_prompt}\n\n"
+        )
+
+        self._log(f"📝 Utworzono system prompt ({len(system_prompt)} znaków)")
+        self._log(f"📝 Utworzono user prompt ({len(user_prompt)} znaków)")
+
         try:
-            response = await self._client.responses.create(
+            self._log(f"🔄 Wysyłam zapytanie do OpenAI (model: {self._model})")
+            response = await self._client.chat.completions.create(
                 model=self._model,
-                input=[
+                messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                reasoning={"effort": "low"},
             )
-            completion_text = getattr(response, "output_text", None)
-            if not completion_text and getattr(response, "output", None):
-                parts = []
-                for item in response.output:
-                    for content in getattr(item, "content", []):
-                        text = getattr(content, "text", None)
-                        if text:
-                            parts.append(text)
-                completion_text = "\n".join(parts)
+            completion_text = response.choices[0].message.content
             if completion_text:
                 completion_text = completion_text.strip()
-                sentences = [s for s in re.split(
-                    r"(?<=[.!?])\s+", completion_text) if s]
-                if len(sentences) == 10:
-                    self._log("Odpowiedź LLM wygenerowana pomyślnie.")
-                    return completion_text
                 self._log(
-                    f"LLM zwrócił {len(sentences)} zdań zamiast 10 – używam fallbacku."
-                )
+                    f"✅ Odpowiedź LLM wygenerowana pomyślnie ({len(completion_text)} znaków)")
+                return completion_text
             else:
-                self._log("LLM nie zwrócił treści – używam fallbacku.")
+                self._log("⚠️ LLM nie zwrócił treści – używam fallbacku")
         except Exception as exc:  # pragma: no cover - network guard
-            self._log(f"Błąd generowania odpowiedzi przez LLM: {exc}")
+            self._log(f"❌ Błąd generowania odpowiedzi przez LLM: {exc}")
+            self._log(f"📋 Typ błędu: {type(exc).__name__}")
+            import traceback
+            self._log(f"📋 Traceback: {traceback.format_exc()}")
 
         return self._fallback_response(advice, request.user_message, persona_text)
 

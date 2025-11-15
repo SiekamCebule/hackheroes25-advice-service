@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Protocol, Sequence, cast
 
 from app.models.advice import Advice, AdviceKind
 
@@ -80,6 +80,7 @@ class SupabaseAdviceRepository(AdviceRepository):
                     "link",
                     "image_url",
                     "author",
+                    "embedding",
                     category_select,
                 ]
             )
@@ -88,7 +89,10 @@ class SupabaseAdviceRepository(AdviceRepository):
         query = apply_filters(base_query) if apply_filters else base_query
         response = await query.execute()
         self._raise_on_error(response)
-        rows: Sequence[AdviceRow] = response.data or []
+        # Supabase client stubs type `data` as a JSON-like union; at runtime we know
+        # it is a list of dicts for this query, so we narrow the type here.
+        raw_rows = getattr(response, "data", None) or []
+        rows = cast(Sequence[AdviceRow], raw_rows)
         return tuple(self._map_advice(row) for row in rows)
 
     @staticmethod
@@ -118,6 +122,7 @@ class SupabaseAdviceRepository(AdviceRepository):
                 f"Unknown advice kind received from Supabase: {kind_value}") from err
 
         return Advice(
+            id=row.get("id"),
             name=row.get("name", ""),
             kind=kind,
             description=row.get("description") or "",
@@ -125,6 +130,7 @@ class SupabaseAdviceRepository(AdviceRepository):
             image_url=row.get("image_url"),
             author=row.get("author"),
             categories=self._extract_categories(row),
+            embedding=row.get("embedding"),
         )
 
     @staticmethod
@@ -161,4 +167,19 @@ class InMemoryAdviceRepository(AdviceRepository):
             for item in self._advice_items
             if item.kind == kind
             and any(category.lower() in category_set for category in item.categories)
+        )
+
+
+class EmbeddingUpdatableAdviceRepository(SupabaseAdviceRepository):
+    """
+    Extension of SupabaseAdviceRepository that exposes an explicit method
+    for updating cached advice embeddings in the database.
+    """
+
+    async def update_embedding(self, advice_id: int, embedding: Sequence[float]) -> None:
+        await (
+            self._client.table(self._TABLE_NAME)
+            .update({"embedding": list(embedding)})
+            .eq("id", advice_id)
+            .execute()
         )

@@ -26,7 +26,7 @@ async def get_advice(
         description="Bearer or custom token identifying the user session.",
     ),
     advice_service: AdviceService = Depends(get_advice_service),
-) -> AdviceResponsePayload:
+) -> dict:
     user_identifier = UserIdentifier(user_id=user_id, auth_token=auth_token)
     if user_identifier.is_empty():
         raise HTTPException(
@@ -50,9 +50,10 @@ async def get_advice(
             response.advice.name,
             response.advice.kind,
         )
-        payload = response.dict()
-        payload["logs"] = advice_service.get_latest_logs()
-        return JSONResponse(payload)
+        # Add logs to the response
+        response_with_logs = response.dict()
+        response_with_logs["logs"] = advice_service.get_latest_logs()
+        return response_with_logs
     except AdviceNotFoundError as error:
         logger.warning(
             "Advice not found for user_id=%s message_len=%d",

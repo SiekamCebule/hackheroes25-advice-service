@@ -4,7 +4,7 @@ import asyncio
 import math
 import re
 from collections import defaultdict
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence, cast
 import os
 
 from app.integrations.openai import create_async_openai_client, get_openai_settings
@@ -381,6 +381,8 @@ class PersonaNarrativeGenerator:
         self._model = model or os.getenv(
             "OPENAI_RESPONSE_MODEL") or "gpt-5-mini"
         self._persona_repository = persona_repository
+        self._reasoning_effort = os.getenv(
+            "OPENAI_REASONING_EFFORT", "low") or "low"
 
     async def generate_and_store(
         self,
@@ -411,7 +413,7 @@ class PersonaNarrativeGenerator:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                reasoning={"effort": "low"},
+                reasoning=cast(Any, {"effort": self._reasoning_effort}),
             )
             persona_text = getattr(response, "output_text", None) or ""
             persona_text = persona_text.strip()
@@ -422,6 +424,11 @@ class PersonaNarrativeGenerator:
 
         await self._persona_repository.save_persona(
             user_id, persona_text, persona_type="tests"
+        )
+        # Dodatkowo zapisujemy profil jako typ "vocational", aby można go było
+        # wykorzystać osobno w trybie embeddingowym do doradztwa zawodowego.
+        await self._persona_repository.save_persona(
+            user_id, persona_text, persona_type="vocational"
         )
         return persona_text
 
@@ -456,7 +463,7 @@ class PersonaNarrativeGenerator:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                reasoning={"effort": "low"},
+                reasoning=cast(Any, {"effort": self._reasoning_effort}),
             )
             persona_text = getattr(response, "output_text", None) or ""
             persona_text = persona_text.strip()

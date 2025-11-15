@@ -1,0 +1,3 @@
+Szablon:
+"Ta porada [...]"
+- Odnosimy się w 3 osobie do porady, w jaki sposób ona może pomóc i dla kogo jest przeznaczona

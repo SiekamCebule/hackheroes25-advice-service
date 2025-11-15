@@ -5,7 +5,7 @@ from typing import Protocol, Sequence
 
 from app.integrations.openai import create_async_openai_client, get_openai_settings
 from app.integrations.supabase import create_supabase_async_client
-from app.repositories.advice_repository import SupabaseAdviceRepository
+from app.repositories.advice_repository import SupabaseAdviceRepository, EmbeddingUpdatableAdviceRepository
 from app.repositories.category_repository import SupabaseAdviceCategoryRepository
 from app.models.advice import (
     Advice,
@@ -19,6 +19,7 @@ from app.repositories.category_repository import (
     AdviceCategoryRepository,
     StaticAdviceCategoryRepository,
 )
+from app.repositories.mock_persona_repository import MockUserPersonaRepository
 from app.services.advice_selection import (
     AdviceSelectionPipeline,
     AdviceIntentDefinition,
@@ -29,8 +30,8 @@ from app.services.advice_selection import (
     NullAdviceIntentDetector,
     OpenAIEmbeddingCategoryClassifier,
     StaticAdviceCategoryClassifier,
+    PersonaEmbeddingAdviceSelectionPipeline,
 )
-from app.repositories.mock_persona_repository import MockUserPersonaRepository
 from app.repositories.user_persona_repository import (
     NullUserPersonaProvider,
     SupabaseUserPersonaRepository,
@@ -68,8 +69,18 @@ class AdviceService:
         return ()
 
 
+class SelectionEngine(Protocol):
+    async def recommend(self, request: AdviceRequestContext) -> AdviceRecommendation:
+        ...
+
+    def get_latest_events(self) -> Sequence[str]:
+        ...
+
+
 class PipelineAdviceProvider:
-    def __init__(self, pipeline: AdviceSelectionPipeline) -> None:
+    def __init__(self, pipeline: SelectionEngine) -> None:
+        # We accept any selection engine that exposes `recommend` and
+        # `get_latest_events` to keep this provider agnostic to the concrete strategy.
         self._pipeline = pipeline
 
     async def provide(self, request: AdviceRequestContext) -> AdviceRecommendation:
@@ -103,11 +114,15 @@ def build_default_advice_pipeline() -> AdviceSelectionPipeline:
             )
         }
     )
-    response_generator = LLMAdviceResponseGenerator(
-        persona_provider=persona_repository,
-        client=create_async_openai_client(get_openai_settings()),
-        model=os.getenv("OPENAI_RESPONSE_MODEL") or "gpt-5-mini",
-    )
+    try:
+        response_generator = LLMAdviceResponseGenerator(
+            persona_provider=persona_repository,
+            client=create_async_openai_client(get_openai_settings()),
+            model=os.getenv("OPENAI_RESPONSE_MODEL") or "gpt-5-mini",
+        )
+    except RuntimeError:
+        # Fallback to EchoAdviceResponseGenerator for demo purposes
+        response_generator = EchoAdviceResponseGenerator()
 
     return AdviceSelectionPipeline(
         advice_repository=advice_repository,
@@ -118,10 +133,11 @@ def build_default_advice_pipeline() -> AdviceSelectionPipeline:
     )
 
 
-def build_supabase_advice_pipeline() -> AdviceSelectionPipeline:
+def build_supabase_advice_pipeline() -> SelectionEngine:
     client = create_supabase_async_client()
-    advice_repository = SupabaseAdviceRepository(client)
+    advice_repository = EmbeddingUpdatableAdviceRepository(client)
     category_repository = SupabaseAdviceCategoryRepository(client)
+    # Build category classifier only for the legacy, category-based mode.
     try:
         category_classifier = build_openai_category_classifier()
         logger.info(
@@ -146,18 +162,7 @@ def build_supabase_advice_pipeline() -> AdviceSelectionPipeline:
             openai_error,
         )
         intent_detector = NullAdviceIntentDetector()
-    # persona_provider = build_user_persona_provider(client)
-    persona_provider = MockUserPersonaRepository(
-        personas={
-            "demo-ui-user": (
-                "Uwielbia pianino, jest spontaniczna, emocjonalna i lubi eksperymentować. "
-                "kocha wyzwania, ale uważa że czasem brakuje jej sensu w życiu."
-                "W wolnym czasie skupia się na rozwoju osobistym poprzez czytanie i refleksję."
-                "Ma lewicowe poglądy polityczne i bardzo interesuje się polityką."
-                "Myśli nad studiami psychologii, socjologii lub politologii."
-            )
-        }
-    )
+    persona_provider = build_user_persona_provider(client)
     try:
         response_generator = build_openai_response_generator(persona_provider)
         logger.info(
@@ -171,6 +176,25 @@ def build_supabase_advice_pipeline() -> AdviceSelectionPipeline:
         )
         response_generator = EchoAdviceResponseGenerator()
 
+    selection_mode = os.getenv("ADVICE_SELECTION_MODE", "categories").lower()
+    if selection_mode == "embedding":
+        logger.info(
+            "Using PersonaEmbeddingAdviceSelectionPipeline (mode=embedding, model=%s).",
+            os.getenv("OPENAI_ADVICE_EMBEDDING_MODEL")
+            or os.getenv("OPENAI_CATEGORY_MODEL")
+            or "default embeddings model",
+        )
+        return PersonaEmbeddingAdviceSelectionPipeline(
+            advice_repository=advice_repository,
+            intent_detector=intent_detector,
+            response_generator=response_generator,
+            persona_provider=build_user_persona_provider(client),
+            similarity_threshold=0.33,
+            embeddings_model=os.getenv("OPENAI_ADVICE_EMBEDDING_MODEL"),
+        )
+
+    logger.info(
+        "Using legacy category-based AdviceSelectionPipeline (mode=categories).")
     return AdviceSelectionPipeline(
         advice_repository=advice_repository,
         category_repository=category_repository,
@@ -183,6 +207,7 @@ def build_supabase_advice_pipeline() -> AdviceSelectionPipeline:
 def get_advice_service() -> AdviceService:
     # TODO: replace build_default_advice_pipeline with production-ready dependencies
     # (Supabase repositories, embedding-based classifiers, and LLM-powered response generators).
+    # Temporarily using default pipeline for chat UI demo (Supabase key invalid)
     # pipeline = build_default_advice_pipeline()
     pipeline = build_supabase_advice_pipeline()
     provider = PipelineAdviceProvider(pipeline=pipeline)

@@ -88,7 +88,17 @@
   - `OPENAI_CATEGORY_MODEL` – (opcjonalnie) model embeddingów dla kategorii.
   - `OPENAI_INTENT_MODEL` – (opcjonalnie) model embeddingów dla intencji.
   - `OPENAI_RESPONSE_MODEL` – model LLM do generowania odpowiedzi (domyślnie `gpt-5-mini`).
+  - `OPENAI_REASONING_EFFORT` – poziom `reasoning.effort` przekazywany w wywołaniach OpenAI Responses (np. `low`, `medium`); domyślnie `low`.
 - **Supabase settings**: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, opcjonalnie `SUPABASE_USER_PERSONA_TABLE`.
+
+### Tryby selekcji porady
+
+- `ADVICE_SELECTION_MODE`
+  - `categories` (domyślny): obecny tryb oparty o kategorie (`AdviceSelectionPipeline` + `OpenAIEmbeddingCategoryClassifier`).
+  - `embedding`: nowy tryb oparty o embedding profilu użytkownika i treści porad (`PersonaEmbeddingAdviceSelectionPipeline`).
+- `OPENAI_ADVICE_EMBEDDING_MODEL`
+  - Nazwa modelu OpenAI używanego do embeddingów porad i profilu użytkownika (np. `text-embedding-3-large`).
+  - Jeśli nie ustawiony, system użyje modelu z ogólnych ustawień (`OPENAI_EMBEDDINGS_MODEL`).
 
 ## Extensibility Notes
 - Intent detection opiera się na `_OPENAI_INTENT_DEFINITIONS`; wystarczy zmienić listę opisów lub próg w `build_openai_intent_detector`.
@@ -98,7 +108,9 @@
 
 ## Operational Checklist
 - Ensure Supabase tables:
-  - `advices` with category links
+  - `advices` with category links and kolumną `embedding` typu `real[]`:
+    - przykładowe migracje:
+      - `ALTER TABLE advices ADD COLUMN embedding real[];`
   - `advice_categories` containing human-readable `name`
   - `advice_category_links` mapping advices ↔ categories
 - (Opcjonalnie) `user_personas` z kolumnami `user_id`, `persona_text`, `updated_at`.

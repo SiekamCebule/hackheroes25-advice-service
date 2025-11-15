@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="pl">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Czat z Poradami - HackHeroes 2025</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+            color: white;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 300;
+            margin-bottom: 10px;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .chat-container {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .message {
+            max-width: 80%;
+            animation: messageSlideIn 0.5s ease-out;
+            opacity: 0;
+            transform: translateY(20px);
+        }
+
+        .message.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .message.user {
+            align-self: flex-end;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 18px 18px 4px 18px;
+            padding: 12px 18px;
+            margin-left: auto;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+        }
+
+        .message.bot {
+            align-self: flex-start;
+            background: white;
+            color: #333;
+            border-radius: 18px 18px 18px 4px;
+            padding: 12px 18px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(0, 0, 0, 0.05);
+        }
+
+        .message.typing {
+            background: rgba(255, 255, 255, 0.8);
+            border: 2px dashed #667eea;
+            animation: typingPulse 2s infinite;
+        }
+
+        .advice-card {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            border-radius: 15px;
+            padding: 20px;
+            margin-top: 15px;
+            color: white;
+            box-shadow: 0 8px 25px rgba(245, 87, 108, 0.3);
+            animation: adviceSlideIn 0.8s ease-out;
+            transform: scale(0.95);
+        }
+
+        .advice-card.show {
+            transform: scale(1);
+        }
+
+        .advice-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 15px;
+        }
+
+        .advice-icon {
+            width: 40px;
+            height: 40px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            backdrop-filter: blur(10px);
+        }
+
+        .advice-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+        }
+
+        .advice-meta {
+            font-size: 0.9rem;
+            opacity: 0.8;
+            margin-bottom: 10px;
+        }
+
+        .advice-description {
+            line-height: 1.6;
+            margin-bottom: 15px;
+        }
+
+        .advice-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .advice-link {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .advice-link:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+
+        .chat-input-container {
+            background: white;
+            padding: 20px;
+            border-top: 1px solid rgba(0, 0, 0, 0.05);
+        }
+
+        .chat-input {
+            display: flex;
+            gap: 15px;
+            align-items: flex-end;
+        }
+
+        .message-input {
+            flex: 1;
+            padding: 15px 20px;
+            border: 2px solid #e1e5e9;
+            border-radius: 25px;
+            font-size: 1rem;
+            outline: none;
+            transition: all 0.3s ease;
+            resize: none;
+            min-height: 50px;
+            max-height: 120px;
+        }
+
+        .message-input:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .user-id-container {
+            margin-bottom: 10px;
+        }
+
+        .user-id-input {
+            width: 100%;
+            padding: 10px 15px;
+            border: 2px solid #e1e5e9;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            outline: none;
+            transition: all 0.3s ease;
+            background: white;
+        }
+
+        .user-id-input:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .send-button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .send-button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .send-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .loading-dots {
+            display: inline-block;
+        }
+
+        .loading-dots span {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #667eea;
+            animation: loadingDots 1.4s infinite ease-in-out both;
+        }
+
+        .loading-dots span:nth-child(1) {
+            animation-delay: -0.32s;
+        }
+
+        .loading-dots span:nth-child(2) {
+            animation-delay: -0.16s;
+        }
+
+        @keyframes messageSlideIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes adviceSlideIn {
+            from {
+                opacity: 0;
+                transform: scale(0.95) translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+        }
+
+        @keyframes typingPulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        @keyframes loadingDots {
+
+            0%,
+            80%,
+            100% {
+                transform: scale(0);
+                opacity: 0.5;
+            }
+
+            40% {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+
+            .header h1 {
+                font-size: 2rem;
+            }
+
+            .message {
+                max-width: 90%;
+            }
+
+            .chat-input {
+                gap: 10px;
+            }
+
+            .message-input {
+                padding: 12px 16px;
+                font-size: 0.9rem;
+            }
+
+            .user-id-input {
+                padding: 8px 12px;
+                font-size: 0.8rem;
+            }
+        }
+
+        .scroll-to-bottom {
+            position: fixed;
+            bottom: 100px;
+            right: 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            cursor: pointer;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+            z-index: 1000;
+        }
+
+        .scroll-to-bottom.show {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .scroll-to-bottom:hover {
+            transform: scale(1.05);
+        }
+
+        .status-bar {
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px 20px;
+            border-radius: 0 0 20px 20px;
+            font-size: 0.9rem;
+            color: #666;
+            backdrop-filter: blur(10px);
+        }
+
+        .status-connected {
+            color: #22c55e;
+        }
+
+        .status-error {
+            color: #ef4444;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 Czat z Poradami</h1>
+            <p>Otrzymaj spersonalizowane rekomendacje i wskazówki</p>
+        </div>
+
+        <div class="chat-container">
+            <div class="status-bar">
+                <span id="status">🔗 Łączenie z API...</span>
+            </div>
+
+            <div class="chat-messages" id="chat-messages">
+                <div class="message bot show">
+                    <div>Cześć! 👋 Jestem Twoim osobistym doradcą. Opowiedz mi o swoich wyzwaniach, zainteresowaniach
+                        lub pytaniach, a polecę Ci coś wartościowego - książkę, film, muzykę, artykuł lub praktyczną
+                        poradę.</div>
+                </div>
+            </div>
+
+            <div class="chat-input-container">
+                <div class="user-id-container">
+                    <input type="text" class="user-id-input" id="user-id-input"
+                        placeholder="User ID (domyślnie: chat-user)" />
+                </div>
+                <div class="chat-input">
+                    <textarea class="message-input" id="message-input" placeholder="Wpisz swoją wiadomość..."
+                        rows="1"></textarea>
+                    <button class="send-button" id="send-button" disabled>
+                        📤
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <button class="scroll-to-bottom" id="scroll-to-bottom" title="Przewiń na dół">
+        ⬇️
+    </button>
+
+    <script>
+        class ChatApp {
+            constructor() {
+                this.messagesContainer = document.getElementById('chat-messages');
+                this.messageInput = document.getElementById('message-input');
+                this.userIdInput = document.getElementById('user-id-input');
+                this.sendButton = document.getElementById('send-button');
+                this.statusElement = document.getElementById('status');
+                this.scrollButton = document.getElementById('scroll-to-bottom');
+
+                this.isLoading = false;
+                this.userId = this.getUserId();
+
+                this.init();
+            }
+
+            init() {
+                this.bindEvents();
+                this.updateSendButton();
+                this.checkScrollButton();
+
+                // Ustaw domyślnego usera w input jeśli nie ma wartości
+                if (!this.userIdInput.value) {
+                    const defaultUserId = localStorage.getItem('chat_user_id') ||
+                        'chat-user-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+                    this.userIdInput.placeholder = `User ID (domyślnie: ${defaultUserId.split('-').slice(0, 2).join('-')}...)`;
+                }
+
+                // Symulacja połączenia z API
+                setTimeout(() => {
+                    this.statusElement.innerHTML = '<span class="status-connected">🟢 Połączono z API porad</span>';
+                }, 1000);
+            }
+
+            bindEvents() {
+                this.messageInput.addEventListener('input', () => {
+                    this.updateSendButton();
+                    this.adjustTextareaHeight();
+                });
+
+                this.messageInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        this.sendMessage();
+                    }
+                });
+
+                this.sendButton.addEventListener('click', () => this.sendMessage());
+
+                this.userIdInput.addEventListener('input', () => {
+                    // Aktualizuj userId gdy użytkownik wpisuje coś
+                    this.userId = this.getUserId();
+                });
+
+                this.messagesContainer.addEventListener('scroll', () => this.checkScrollButton());
+
+                this.scrollButton.addEventListener('click', () => this.scrollToBottom());
+
+                // Auto-scroll przy nowych wiadomościach
+                const observer = new MutationObserver(() => {
+                    this.scrollToBottom();
+                });
+                observer.observe(this.messagesContainer, { childList: true });
+            }
+
+            getUserId() {
+                // Sprawdź input użytkownika najpierw
+                const inputUserId = this.userIdInput.value.trim();
+                if (inputUserId) {
+                    return inputUserId;
+                }
+
+                // Jeśli input pusty, użyj localStorage lub generuj nowy
+                let userId = localStorage.getItem('chat_user_id');
+                if (!userId) {
+                    userId = 'chat-user-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+                    localStorage.setItem('chat_user_id', userId);
+                }
+                return userId;
+            }
+
+            updateSendButton() {
+                const hasText = this.messageInput.value.trim().length > 0;
+                this.sendButton.disabled = !hasText || this.isLoading;
+            }
+
+            adjustTextareaHeight() {
+                this.messageInput.style.height = 'auto';
+                this.messageInput.style.height = Math.min(this.messageInput.scrollHeight, 120) + 'px';
+            }
+
+            async sendMessage() {
+                const message = this.messageInput.value.trim();
+                if (!message || this.isLoading) return;
+
+                this.addMessage(message, 'user');
+                this.messageInput.value = '';
+                this.adjustTextareaHeight();
+                this.updateSendButton();
+
+                this.isLoading = true;
+                this.updateSendButton();
+
+                // Dodaj wiadomość "piszę..."
+                const typingMessage = this.addTypingIndicator();
+
+                try {
+                    const response = await this.callAdviceAPI(message);
+                    this.removeTypingIndicator(typingMessage);
+
+                    // Dodaj odpowiedź bota (spersonalizowana odpowiedź LLM)
+                    this.addMessage(response.chat_response, 'bot');
+
+                    // Dodaj kartę z poradą jeśli istnieje
+                    if (response.advice) {
+                        setTimeout(() => {
+                            this.addAdviceCard(response.advice);
+                        }, 500);
+                    }
+
+                } catch (error) {
+                    this.removeTypingIndicator(typingMessage);
+                    this.addMessage('Przepraszam, wystąpił błąd podczas łączenia z API. Spróbuj ponownie.', 'bot');
+                    console.error('API Error:', error);
+                    this.statusElement.innerHTML = '<span class="status-error">🔴 Błąd połączenia z API</span>';
+                } finally {
+                    this.isLoading = false;
+                    this.updateSendButton();
+                }
+            }
+
+            async callAdviceAPI(message) {
+                const params = new URLSearchParams({
+                    message: message,
+                    user_id: this.userId
+                });
+
+                this.statusElement.innerHTML = '<span class="status-connected">🔄 Wysyłam zapytanie...</span>';
+
+                const response = await fetch(`/advice?${params.toString()}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                // Wyświetl szczegóły logów w konsoli
+                console.log('📋 Szczegóły odpowiedzi API:', {
+                    user_id: this.userId,
+                    message: message,
+                    logs: data.logs,
+                    advice: data.advice.name,
+                    response_length: data.chat_response.length
+                });
+
+                // Sprawdź czy odpowiedź jest prawdziwa czy fallback
+                const isRealLLM = !data.chat_response.includes('Placeholder response');
+                const statusText = isRealLLM
+                    ? '🟢 LLM działa - prawdziwa odpowiedź'
+                    : '⚠️ Fallback - placeholder response';
+
+                this.statusElement.innerHTML = `<span class="status-connected">${statusText}</span>`;
+                return data;
+            }
+
+            addMessage(text, type) {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${type}`;
+                messageDiv.textContent = text;
+
+                this.messagesContainer.appendChild(messageDiv);
+
+                // Animacja pojawienia się
+                setTimeout(() => {
+                    messageDiv.classList.add('show');
+                }, 10);
+
+                return messageDiv;
+            }
+
+            addTypingIndicator() {
+                const typingDiv = document.createElement('div');
+                typingDiv.className = 'message bot typing';
+                typingDiv.innerHTML = '<div class="loading-dots"><span></span><span></span><span></span></div> Piszę...';
+
+                this.messagesContainer.appendChild(typingDiv);
+                setTimeout(() => typingDiv.classList.add('show'), 10);
+
+                return typingDiv;
+            }
+
+            removeTypingIndicator(typingElement) {
+                if (typingElement && typingElement.parentNode) {
+                    typingElement.parentNode.removeChild(typingElement);
+                }
+            }
+
+            addAdviceCard(advice) {
+                const cardDiv = document.createElement('div');
+                cardDiv.className = 'advice-card';
+
+                const icon = this.getAdviceIcon(advice.kind);
+                const title = advice.name || 'Porada';
+                const meta = this.formatAdviceMeta(advice);
+
+                cardDiv.innerHTML = `
+                    <div class="advice-header">
+                        <div class="advice-icon">${icon}</div>
+                        <div class="advice-title">💡 ${title}</div>
+                    </div>
+                    ${meta ? `<div class="advice-meta">${meta}</div>` : ''}
+                    <div class="advice-description">${advice.description || 'Brak opisu'}</div>
+                    <div class="advice-actions">
+                        ${advice.link_url ? `<a href="${advice.link_url}" target="_blank" class="advice-link">🔗 Wypróbuj poradę</a>` : ''}
+                        ${advice.image_url ? `<a href="${advice.image_url}" target="_blank" class="advice-link">🖼️ Zobacz obraz</a>` : ''}
+                    </div>
+                `;
+
+                this.messagesContainer.appendChild(cardDiv);
+
+                // Animacja pojawienia się
+                setTimeout(() => {
+                    cardDiv.classList.add('show');
+                }, 10);
+            }
+
+            getAdviceIcon(kind) {
+                const icons = {
+                    book: '📚',
+                    movie: '🎬',
+                    music: '🎵',
+                    youtube_video: '📺',
+                    article: '📄',
+                    habit: '🎯',
+                    advice: '💡',
+                    concept: '🧠',
+                    psychotherapy: '🛋️',
+                    podcast: '🎧',
+                    quote: '💭',
+                    person: '👤'
+                };
+                return icons[kind] || '💡';
+            }
+
+            formatAdviceMeta(advice) {
+                const parts = [];
+                if (advice.kind) parts.push(this.formatKind(advice.kind));
+                if (advice.author) parts.push(`Autor: ${advice.author}`);
+                return parts.join(' • ');
+            }
+
+            formatKind(kind) {
+                const kinds = {
+                    book: 'Książka',
+                    movie: 'Film',
+                    music: 'Muzyka',
+                    youtube_video: 'Film YouTube',
+                    article: 'Artykuł',
+                    habit: 'Nawyk',
+                    advice: 'Porada',
+                    concept: 'Koncepcja',
+                    psychotherapy: 'Psychoterapia',
+                    podcast: 'Podcast',
+                    quote: 'Cytat',
+                    person: 'Osoba'
+                };
+                return kinds[kind] || kind;
+            }
+
+            checkScrollButton() {
+                const { scrollTop, scrollHeight, clientHeight } = this.messagesContainer;
+                const isNearBottom = scrollTop + clientHeight >= scrollHeight - 100;
+
+                if (isNearBottom) {
+                    this.scrollButton.classList.remove('show');
+                } else {
+                    this.scrollButton.classList.add('show');
+                }
+            }
+
+            scrollToBottom() {
+                this.messagesContainer.scrollTo({
+                    top: this.messagesContainer.scrollHeight,
+                    behavior: 'smooth'
+                });
+            }
+        }
+
+        // Inicjalizacja aplikacji
+        document.addEventListener('DOMContentLoaded', () => {
+            new ChatApp();
+        });
+    </script>
+</body>
+
+</html>
